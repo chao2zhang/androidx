@@ -106,7 +106,6 @@ import java.util.Map;
  */
 public abstract class ViewModel {
     // Can't use ConcurrentHashMap, because it can lose values on old apis (see b/37042460)
-    @Nullable
     private final Map<String, Object> mBagOfTags = new HashMap<>();
     private volatile boolean mCleared = false;
 
@@ -127,12 +126,10 @@ public abstract class ViewModel {
         // and in those cases, mBagOfTags is null. It'll always be empty though
         // because setTagIfAbsent and getTag are not final so we can skip
         // clearing it
-        if (mBagOfTags != null) {
-            synchronized (mBagOfTags) {
-                for (Object value : mBagOfTags.values()) {
-                    // see comment for the similar call in setTagIfAbsent
-                    closeWithRuntimeException(value);
-                }
+        synchronized (mBagOfTags) {
+            for (Object value : mBagOfTags.values()) {
+                // see comment for the similar call in setTagIfAbsent
+                closeWithRuntimeException(value);
             }
         }
         onCleared();
@@ -174,9 +171,6 @@ public abstract class ViewModel {
      */
     @SuppressWarnings({"TypeParameterUnusedInFormals", "unchecked"})
     <T> T getTag(String key) {
-        if (mBagOfTags == null) {
-            return null;
-        }
         synchronized (mBagOfTags) {
             return (T) mBagOfTags.get(key);
         }
