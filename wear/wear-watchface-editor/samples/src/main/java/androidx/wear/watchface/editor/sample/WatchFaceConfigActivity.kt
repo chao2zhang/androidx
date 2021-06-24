@@ -28,6 +28,7 @@ import androidx.annotation.VisibleForTesting
 import androidx.fragment.app.Fragment
 import androidx.fragment.app.FragmentActivity
 import androidx.wear.complications.data.ComplicationData
+import androidx.wear.watchface.editor.ChosenComplicationProvider
 import androidx.wear.watchface.editor.EditorSession
 import androidx.wear.watchface.style.UserStyle
 import androidx.wear.watchface.style.UserStyleSchema
@@ -55,7 +56,7 @@ internal interface FragmentController {
     )
 
     /** Lets the user configure the complication provider for a single complication slot. */
-    suspend fun showComplicationConfig(complicationId: Int): Boolean
+    suspend fun showComplicationConfig(complicationSlotId: Int): ChosenComplicationProvider?
 }
 
 // Reference time for editor screenshots for analog watch faces.
@@ -71,6 +72,10 @@ private const val DIGITAL_WATCHFACE_REFERENCE_TIME_MS = 1602321000000L
  * as userStyle configuration.
  */
 class WatchFaceConfigActivity : FragmentActivity() {
+    companion object {
+        private const val TAG = "WatchFaceConfigActivity"
+    }
+
     internal val complicationData = HashMap<Int, ComplicationData>()
 
     internal lateinit var editorSession: EditorSession
@@ -87,7 +92,7 @@ class WatchFaceConfigActivity : FragmentActivity() {
                 EditorSession.createOnWatchEditingSession(
                     this@WatchFaceConfigActivity,
                     intent!!
-                )!!,
+                ),
                 object : FragmentController {
                     @SuppressLint("SyntheticAccessor")
                     override fun showConfigFragment() {
@@ -116,8 +121,8 @@ class WatchFaceConfigActivity : FragmentActivity() {
                      */
                     @SuppressWarnings("deprecation")
                     override suspend fun showComplicationConfig(
-                        complicationId: Int
-                    ) = editorSession.openComplicationProviderChooser(complicationId)
+                        complicationSlotId: Int
+                    ) = editorSession.openComplicationProviderChooser(complicationSlotId)
                 }
             )
         }
@@ -170,11 +175,11 @@ class WatchFaceConfigActivity : FragmentActivity() {
             }
 
         var topLevelOptionCount = editorSession.userStyleSchema.userStyleSettings.size
-        val hasBackgroundComplication = editorSession.backgroundComplicationId != null
+        val hasBackgroundComplication = editorSession.backgroundComplicationSlotId != null
         if (hasBackgroundComplication) {
             topLevelOptionCount++
         }
-        val numComplications = editorSession.complicationsState.size
+        val numComplications = editorSession.complicationSlotsState.size
         val hasNonBackgroundComplication =
             numComplications > (if (hasBackgroundComplication) 1 else 0)
         if (hasNonBackgroundComplication) {
@@ -188,13 +193,15 @@ class WatchFaceConfigActivity : FragmentActivity() {
 
             // For a single complication go directly to the provider selector.
             numComplications == 1 -> {
-                val onlyComplication = editorSession.complicationsState.entries.first()
+                val onlyComplication = editorSession.complicationSlotsState.entries.first()
                 coroutineScope.launch {
-                    fragmentController.showComplicationConfig(onlyComplication.key)
+                    val chosenComplicationProvider =
+                        fragmentController.showComplicationConfig(onlyComplication.key)
+                    updateUi(chosenComplicationProvider)
                 }
             }
 
-            // For multiple complications select the complication to configure first.
+            // For multiple complicationSlots select the complication to configure first.
             numComplications > 1 -> fragmentController.showComplicationConfigSelectionFragment()
 
             // For a single style, go select the option.
@@ -215,5 +222,11 @@ class WatchFaceConfigActivity : FragmentActivity() {
         editorSession.close()
         // Make sure the activity closes.
         finish()
+    }
+
+    private fun updateUi(
+        @Suppress("UNUSED_PARAMETER") chosenComplicationProvider: ChosenComplicationProvider?
+    ) {
+        // The activity can use the chosen complication to update the UI.
     }
 }

@@ -19,7 +19,7 @@ package androidx.wear.tiles.timeline;
 import androidx.annotation.MainThread;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
-import androidx.wear.tiles.builders.TimelineBuilders;
+import androidx.wear.tiles.TimelineBuilders;
 import androidx.wear.tiles.proto.TimelineProto.TimelineEntry;
 import androidx.wear.tiles.timeline.internal.TilesTimelineCacheInternal;
 
@@ -92,6 +92,7 @@ public final class TilesTimelineCache {
      * @return The time in millis that {@code entry} should be considered to be expired. This value
      *     will be {@link Long#MAX_VALUE} if {@code entry} does not expire.
      */
+    @MainThread
     public long findCurrentTimelineEntryExpiry(
             @NonNull TimelineBuilders.TimelineEntry entry, long fromTimeMillis) {
         return mCache.findCurrentTimelineEntryExpiry(entry.toProto(), fromTimeMillis);

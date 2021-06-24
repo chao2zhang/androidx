@@ -26,7 +26,9 @@ import androidx.camera.camera2.pipe.integration.config.CameraScope
 import androidx.camera.camera2.pipe.integration.impl.CameraCallbackMap
 import androidx.camera.camera2.pipe.integration.impl.CameraProperties
 import androidx.camera.core.CameraSelector
+import androidx.camera.core.CameraState
 import androidx.camera.core.ExposureState
+import androidx.camera.core.FocusMeteringAction
 import androidx.camera.core.ZoomState
 import androidx.camera.core.impl.CamcorderProfileProvider
 import androidx.camera.core.impl.CameraCaptureCallback
@@ -34,6 +36,7 @@ import androidx.camera.core.impl.CameraInfoInternal
 import androidx.camera.core.impl.Quirks
 import androidx.camera.core.impl.utils.CameraOrientationUtil
 import androidx.lifecycle.LiveData
+import androidx.lifecycle.MutableLiveData
 import java.util.concurrent.Executor
 import javax.inject.Inject
 
@@ -85,6 +88,11 @@ class CameraInfoAdapter @Inject constructor(
     @SuppressLint("UnsafeOptInUsageError")
     override fun getExposureState(): ExposureState = cameraState.exposureStateLiveData.value!!
 
+    override fun getCameraState(): LiveData<CameraState> {
+        Log.warn { "TODO: CameraState is not yet supported." }
+        return MutableLiveData(CameraState.create(CameraState.Type.CLOSED))
+    }
+
     override fun addSessionCaptureCallback(executor: Executor, callback: CameraCaptureCallback) =
         cameraCallbackMap.addCaptureCallback(callback, executor)
 
@@ -103,5 +111,10 @@ class CameraInfoAdapter @Inject constructor(
     override fun getCameraQuirks(): Quirks {
         Log.warn { "TODO: Quirks are not yet supported." }
         return defaultQuirks
+    }
+
+    override fun isFocusMeteringSupported(action: FocusMeteringAction): Boolean {
+        Log.warn { "TODO: isFocusAndMeteringSupported are not yet supported." }
+        return false
     }
 }

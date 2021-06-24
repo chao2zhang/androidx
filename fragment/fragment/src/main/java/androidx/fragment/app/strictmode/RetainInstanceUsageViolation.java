@@ -16,9 +16,13 @@
 
 package androidx.fragment.app.strictmode;
 
-import androidx.annotation.RestrictTo;
+import androidx.annotation.NonNull;
+import androidx.fragment.app.Fragment;
 
 /** See #{@link FragmentStrictMode.Policy.Builder#detectRetainInstanceUsage()}. */
-@RestrictTo(RestrictTo.Scope.LIBRARY) // TODO: Make API public as soon as we have a few checks
-public final class RetainInstanceUsageViolation extends Violation {
+public abstract class RetainInstanceUsageViolation extends Violation {
+
+    RetainInstanceUsageViolation(@NonNull Fragment fragment) {
+        super(fragment);
+    }
 }

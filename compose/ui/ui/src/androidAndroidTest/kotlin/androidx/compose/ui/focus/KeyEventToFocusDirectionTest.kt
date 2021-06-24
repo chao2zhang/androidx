@@ -16,6 +16,15 @@
 
 package androidx.compose.ui.focus
 
+import androidx.compose.ui.ExperimentalComposeUiApi
+import androidx.compose.ui.focus.FocusDirection.Companion.Down
+import androidx.compose.ui.focus.FocusDirection.Companion.In
+import androidx.compose.ui.focus.FocusDirection.Companion.Left
+import androidx.compose.ui.focus.FocusDirection.Companion.Next
+import androidx.compose.ui.focus.FocusDirection.Companion.Out
+import androidx.compose.ui.focus.FocusDirection.Companion.Previous
+import androidx.compose.ui.focus.FocusDirection.Companion.Right
+import androidx.compose.ui.focus.FocusDirection.Companion.Up
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.input.key.nativeKeyCode
@@ -24,7 +33,7 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.SmallTest
-import com.google.common.truth.Truth
+import com.google.common.truth.Truth.assertThat
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -35,6 +44,7 @@ import android.view.KeyEvent.META_SHIFT_ON as Shift
 
 @SmallTest
 @RunWith(AndroidJUnit4::class)
+@OptIn(ExperimentalComposeUiApi::class)
 class KeyEventToFocusDirectionTest {
     @get:Rule
     val rule = createComposeRule()
@@ -57,7 +67,7 @@ class KeyEventToFocusDirectionTest {
         val focusDirection = owner.getFocusDirection(keyEvent)
 
         // Assert.
-        Truth.assertThat(focusDirection).isEqualTo(FocusDirection.Left)
+        assertThat(focusDirection).isEqualTo(Left)
     }
 
     @Test
@@ -69,7 +79,7 @@ class KeyEventToFocusDirectionTest {
         val focusDirection = owner.getFocusDirection(keyEvent)
 
         // Assert.
-        Truth.assertThat(focusDirection).isEqualTo(FocusDirection.Right)
+        assertThat(focusDirection).isEqualTo(Right)
     }
 
     @Test
@@ -81,7 +91,7 @@ class KeyEventToFocusDirectionTest {
         val focusDirection = owner.getFocusDirection(keyEvent)
 
         // Assert.
-        Truth.assertThat(focusDirection).isEqualTo(FocusDirection.Up)
+        assertThat(focusDirection).isEqualTo(Up)
     }
 
     @Test
@@ -93,7 +103,7 @@ class KeyEventToFocusDirectionTest {
         val focusDirection = owner.getFocusDirection(keyEvent)
 
         // Assert.
-        Truth.assertThat(focusDirection).isEqualTo(FocusDirection.Down)
+        assertThat(focusDirection).isEqualTo(Down)
     }
 
     @Test
@@ -105,7 +115,7 @@ class KeyEventToFocusDirectionTest {
         val focusDirection = owner.getFocusDirection(keyEvent)
 
         // Assert.
-        Truth.assertThat(focusDirection).isEqualTo(FocusDirection.Next)
+        assertThat(focusDirection).isEqualTo(Next)
     }
 
     @Test
@@ -117,6 +127,32 @@ class KeyEventToFocusDirectionTest {
         val focusDirection = owner.getFocusDirection(keyEvent)
 
         // Assert.
-        Truth.assertThat(focusDirection).isEqualTo(FocusDirection.Previous)
+        assertThat(focusDirection).isEqualTo(Previous)
+    }
+
+    @Test
+    fun dpadCenter_in() {
+        // Arrange.
+        val keyEvent = KeyEvent(AndroidKeyEvent(KeyDown, Key.DirectionCenter.nativeKeyCode))
+
+        // Act.
+        val focusDirection = owner.getFocusDirection(keyEvent)
+
+        // Assert.
+        @OptIn(ExperimentalComposeUiApi::class)
+        assertThat(focusDirection).isEqualTo(In)
+    }
+
+    @Test
+    fun back_out() {
+        // Arrange.
+        val keyEvent = KeyEvent(AndroidKeyEvent(KeyDown, Key.Back.nativeKeyCode))
+
+        // Act.
+        val focusDirection = owner.getFocusDirection(keyEvent)
+
+        // Assert.
+        @OptIn(ExperimentalComposeUiApi::class)
+        assertThat(focusDirection).isEqualTo(Out)
     }
 }

@@ -22,11 +22,10 @@ import androidx.annotation.Nullable;
 import androidx.wear.tiles.proto.TimelineProto.TimeInterval;
 import androidx.wear.tiles.proto.TimelineProto.Timeline;
 import androidx.wear.tiles.proto.TimelineProto.TimelineEntry;
-import androidx.wear.tiles.timeline.TilesTimelineCache;
 
 /**
- * Timeline cache for Wear Tiles. This will take in a full timeline, and return the appropriate
- * entry for the given time from {@code findTimelineEntryForTime}.
+ * Timeline cache for Tiles. This will take in a full timeline, and return the appropriate entry for
+ * the given time from {@code findTimelineEntryForTime}.
  */
 public final class TilesTimelineCacheInternal {
     private final Timeline mTimeline;
@@ -57,8 +56,7 @@ public final class TilesTimelineCacheInternal {
                 // Only override a default if there's no more specific entry found.
                 if (currentEntryLength == Long.MAX_VALUE) {
                     // Let's treat an entry with no validity as being a "default", as long as we
-                    // haven't found
-                    // any other valid entries
+                    // haven't found any other valid entries
                     currentEntry = entry;
                 }
             } else {
@@ -82,10 +80,10 @@ public final class TilesTimelineCacheInternal {
     }
 
     /**
-     * A (very) inexact version of {@link TilesTimelineCache#findTimelineEntryForTime(long)} which
-     * finds the closest timeline entry to the current time, regardless of validity. This should
-     * only used as a fallback if {@code findTimelineEntryForTime} fails, so it can attempt to at
-     * least show something.
+     * A (very) inexact version of {@link TilesTimelineCacheInternal#findTimelineEntryForTime(long)}
+     * which finds the closest timeline entry to the current time, regardless of validity. This
+     * should only used as a fallback if {@code findTimelineEntryForTime} fails, so it can attempt
+     * to at least show something.
      *
      * <p>By this point, we're technically in an error state, so just show _something_. Note that
      * calling this if {@code findTimelineEntryForTime} returns a valid entry is invalid, and may
@@ -147,16 +145,15 @@ public final class TilesTimelineCacheInternal {
      * @return The time in millis that {@code entry} should be considered to be expired. This value
      *     will be {@link Long#MAX_VALUE} if {@code entry} does not expire.
      */
-    public long findCurrentTimelineEntryExpiry(
-            @NonNull TimelineEntry entry, long fromTimeMillis) {
+    @MainThread
+    public long findCurrentTimelineEntryExpiry(@NonNull TimelineEntry entry, long fromTimeMillis) {
         long currentSmallestExpiry = Long.MAX_VALUE;
         long entryValidityLength = Long.MAX_VALUE;
 
         if (entry.hasValidity() && entry.getValidity().getEndMillis() > fromTimeMillis) {
             currentSmallestExpiry = entry.getValidity().getEndMillis();
             entryValidityLength =
-                    entry.getValidity().getEndMillis()
-                            - entry.getValidity().getStartMillis();
+                    entry.getValidity().getEndMillis() - entry.getValidity().getStartMillis();
         }
 
         // Search for the starting edge of an overlapping period (i.e. one with startTime between
@@ -186,37 +183,31 @@ public final class TilesTimelineCacheInternal {
             if (entry.hasValidity()) {
                 if (nextEntryValidity.getStartMillis() > entry.getValidity().getEndMillis()
                         || nextEntryValidity.getStartMillis()
-                        < entry.getValidity().getStartMillis()) {
+                                < entry.getValidity().getStartMillis()) {
                     continue;
                 }
             }
 
             // Discard if its start time is greater than the current smallest one we've found. In
-            // that
-            // case, the entry that gave us currentSmallestExpiry would be shown next.
+            // that case, the entry that gave us currentSmallestExpiry would be shown next.
             if (nextEntryValidity.getStartMillis() > currentSmallestExpiry) {
                 continue;
             }
 
             // Discard if it's less than "fromTime". This prevents accidentally returning valid
-            // times in
-            // the past.
+            // times in the past.
             if (nextEntryValidity.getStartMillis() < fromTimeMillis) {
                 continue;
             }
 
             // Finally, consider whether the length of the validity period is shorter than the
-            // current
-            // one. If this doesn't hold, the current entry would be shown instead (the timeline
-            // entry
-            // with the shortest validity period is always shown if overlapping).
+            // current one. If this doesn't hold, the current entry would be shown instead (the
+            // timeline entry with the shortest validity period is always shown if overlapping).
             //
             // We don't need to deal with the case of shortest validity between this entry, and an
-            // already
-            // chosen candidate time, as if we've got here, the start time of nextEntry is lower
-            // than
-            // the entry that is driving currentSmallestExpiry, so nextEntry would be shown
-            // regardless.
+            // already chosen candidate time, as if we've got here, the start time of nextEntry is
+            // lower than the entry that is driving currentSmallestExpiry, so nextEntry would be
+            // shown regardless.
             long nextEntryValidityLength =
                     nextEntryValidity.getEndMillis() - nextEntryValidity.getStartMillis();
 

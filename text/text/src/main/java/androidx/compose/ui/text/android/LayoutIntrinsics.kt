@@ -22,7 +22,6 @@ import android.text.Spanned
 import android.text.TextPaint
 import androidx.compose.ui.text.android.style.LetterSpacingSpanEm
 import androidx.compose.ui.text.android.style.LetterSpacingSpanPx
-import androidx.compose.ui.text.android.style.LineHeightSpan
 import java.text.BreakIterator
 import java.util.PriorityQueue
 
@@ -83,7 +82,7 @@ internal fun minIntrinsicWidth(text: CharSequence, paint: TextPaint): Float {
     // 10 is just a random number that limits the size of the candidate list
     val heapSize = 10
     // min heap that will hold [heapSize] many words with max length
-    val longestWordCandidates = PriorityQueue<Pair<Int, Int>>(
+    val longestWordCandidates = PriorityQueue(
         heapSize,
         Comparator<Pair<Int, Int>> { left, right ->
             (left.second - left.first) - (right.second - right.first)
@@ -139,6 +138,5 @@ private fun shouldIncreaseMaxIntrinsic(
         textPaint.letterSpacing != 0f ||
             charSequence.hasSpan(LetterSpacingSpanPx::class.java) ||
             charSequence.hasSpan(LetterSpacingSpanEm::class.java)
-        ) &&
-        charSequence.hasSpan(LineHeightSpan::class.java)
+        )
 }

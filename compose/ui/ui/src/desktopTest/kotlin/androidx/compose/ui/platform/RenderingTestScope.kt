@@ -20,6 +20,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.unit.Density
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -68,6 +69,12 @@ internal class RenderingTestScope(
     )
     private var owner: DesktopOwner? = null
 
+    var density: Float
+        get() = owner!!.density.density
+        set(value) {
+            owner!!.density = Density(value, owner!!.density.fontScale)
+        }
+
     fun dispose() {
         owner?.dispose()
         frameDispatcher.cancel()
@@ -80,7 +87,7 @@ internal class RenderingTestScope(
         owner?.dispose()
         val owner = DesktopOwner(owners)
         owner.setContent {
-            CompositionLocalProvider(DesktopPlatformAmbient provides platform) {
+            CompositionLocalProvider(LocalDesktopPlatform provides platform) {
                 content()
             }
         }

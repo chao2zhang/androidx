@@ -16,17 +16,20 @@
 
 package androidx.camera.video;
 
+import android.os.ParcelFileDescriptor;
+
 import androidx.annotation.NonNull;
 
 import com.google.auto.value.AutoValue;
 
-import java.io.FileDescriptor;
-
 /**
  * A class to store the result to a given file descriptor.
  *
- * <p> The file descriptor must be seekable and writable. And the caller should be responsible for
+ * <p>The file descriptor must be seekable and writable. And the caller should be responsible for
  * closing the file descriptor.
+ *
+ * <p>To use a {@link java.io.File} as an output destination instead of a file descriptor, use
+ * {@link FileOutputOptions}.
  */
 @AutoValue
 public abstract class FileDescriptorOutputOptions extends OutputOptions {
@@ -38,7 +41,8 @@ public abstract class FileDescriptorOutputOptions extends OutputOptions {
     /** Returns a builder for this FileDescriptorOutputOptions. */
     @NonNull
     public static Builder builder() {
-        return new AutoValue_FileDescriptorOutputOptions.Builder();
+        return new AutoValue_FileDescriptorOutputOptions.Builder()
+                .setFileSizeLimit(FILE_SIZE_UNLIMITED);
     }
 
     /**
@@ -47,22 +51,34 @@ public abstract class FileDescriptorOutputOptions extends OutputOptions {
     @Override
     public abstract int getFileSizeLimit();
 
-    /** Gets the FileDescriptor instance */
+    /**
+     * Gets the file descriptor instance.
+     * @return the file descriptor used as the output destination.
+     */
     @NonNull
-    public abstract FileDescriptor getFileDescriptor();
+    public abstract ParcelFileDescriptor getParcelFileDescriptor();
 
     /** The builder of the {@link FileDescriptorOutputOptions}. */
     @AutoValue.Builder
+    @SuppressWarnings("StaticFinalBuilder")
     public abstract static class Builder {
         Builder() {
         }
 
-        /** Defines how to store the result. */
+        /**
+         * Defines the file descriptor used to store the result.
+         * @param fileDescriptor the file descriptor to use as the output destination.
+         */
         @NonNull
-        public abstract Builder setFileDescriptor(
-                @NonNull FileDescriptor fileDescriptor);
+        public abstract Builder setParcelFileDescriptor(
+                @NonNull ParcelFileDescriptor fileDescriptor);
 
-        /** Sets the limit for the file length in bytes. */
+        /**
+         * Sets the limit for the file length in bytes. Zero or negative values are considered
+         * unlimited.
+         *
+         * <p>If not set, defaults to {@link #FILE_SIZE_UNLIMITED}.
+         */
         @NonNull
         public abstract Builder setFileSizeLimit(int bytes);
 

@@ -21,6 +21,9 @@ import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.PorterDuff
+import android.graphics.PorterDuffXfermode
 import android.graphics.Rect
 import android.icu.util.Calendar
 import android.opengl.EGL14
@@ -29,16 +32,21 @@ import android.opengl.EGLContext
 import android.opengl.EGLDisplay
 import android.opengl.EGLSurface
 import android.opengl.GLES20
+import android.os.Build
 import android.util.Log
 import android.view.SurfaceHolder
 import androidx.annotation.CallSuper
+import androidx.annotation.DoNotInline
 import androidx.annotation.IntDef
 import androidx.annotation.IntRange
 import androidx.annotation.Px
+import androidx.annotation.RequiresApi
 import androidx.annotation.UiThread
+import androidx.annotation.WorkerThread
 import androidx.wear.utility.TraceEvent
 import androidx.wear.watchface.Renderer.CanvasRenderer
 import androidx.wear.watchface.Renderer.GlesRenderer
+import androidx.wear.watchface.Renderer.GlesRenderer.GlesException
 import androidx.wear.watchface.style.CurrentUserStyleRepository
 import java.nio.ByteBuffer
 
@@ -88,27 +96,33 @@ private val EGL_CONTEXT_ATTRIB_LIST =
 
 internal val EGL_SURFACE_ATTRIB_LIST = intArrayOf(EGL14.EGL_NONE)
 
+private val HIGHLIGHT_LAYER_COMPOSITE_PAINT = Paint().apply {
+    xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC_OVER)
+}
+
 /**
- * The base class for [CanvasRenderer] and [GlesRenderer].
+ * The base class for [CanvasRenderer] and [GlesRenderer]. Renderers are constructed on a background
+ * thread but all rendering is done on the UiThread. There is a memory barrier between construction
+ * and rendering so no special threading primitives are required.
  *
  * @param surfaceHolder The [SurfaceHolder] that [renderInternal] will draw into.
  * @param currentUserStyleRepository The associated [CurrentUserStyleRepository].
  * @param watchState The associated [WatchState].
  * @param interactiveDrawModeUpdateDelayMillis The interval in milliseconds between frames in
- *     interactive [DrawMode]s. To render at 60hz set to 16. Note when battery is low, the frame
- *     rate will be clamped to 10fps. Watch faces are recommended to use lower frame rates if
- *     possible for better battery life. Variable frame rates can also help preserve battery
- *     life, e.g. if a watch face has a short animation once per second it can adjust the frame
- *     rate inorder to sleep when not animating.
+ * interactive [DrawMode]s. To render at 60hz set to 16. Note when battery is low, the frame rate
+ * will be clamped to 10fps. Watch faces are recommended to use lower frame rates if possible for
+ * better battery life. Variable frame rates can also help preserve battery life, e.g. if a watch
+ * face has a short animation once per second it can adjust the frame rate inorder to sleep when
+ * not animating.
  */
-public sealed class Renderer(
+public sealed class Renderer @WorkerThread constructor(
     public val surfaceHolder: SurfaceHolder,
     private val currentUserStyleRepository: CurrentUserStyleRepository,
     internal val watchState: WatchState,
     @IntRange(from = 0, to = 60000)
     public var interactiveDrawModeUpdateDelayMillis: Long,
 ) {
-    internal lateinit var watchFaceHostApi: WatchFaceHostApi
+    internal var watchFaceHostApi: WatchFaceHostApi? = null
 
     init {
         surfaceHolder.addCallback(
@@ -161,6 +175,28 @@ public sealed class Renderer(
                 onRenderParametersChanged(value)
             }
         }
+
+    /**
+     * Accessibility [ContentDescriptionLabel] for any rendered watch face elements other than the
+     * time and [ComplicationSlot]s which are generated automatically.
+     *
+     * The [Int] in the `Pair<Int, ContentDescriptionLabel>` is used to sort the
+     * [ContentDescriptionLabel]s. Note the time piece has an accessibility traversal index of -1
+     * and each [ComplicationSlot]'s index is defined by its
+     * [ComplicationSlot.accessibilityTraversalIndex].
+     */
+    public var additionalContentDescriptionLabels:
+        Collection<Pair<Int, ContentDescriptionLabel>> = emptyList()
+            set(value) {
+                field = value
+                for (pair in value) {
+                    require(pair.first >= 0) {
+                        "Each accessibility label index in additionalContentDescriptionLabels " +
+                            "must be >= 0"
+                    }
+                }
+                watchFaceHostApi?.updateContentDescriptionLabels()
+            }
 
     /** Called when the Renderer is destroyed. */
     @UiThread
@@ -226,7 +262,7 @@ public sealed class Renderer(
      * shouldAnimate returns true we inhibit entering [DrawMode.AMBIENT].
      *
      * By default we remain at an interactive frame rate when the watch face is visible and we're
-     * not in ambient mode. Watchfaces with animated transitions for entering ambient mode may
+     * not in ambient mode. Watch faces with animated transitions for entering ambient mode may
      * need to override this to ensure they play smoothly.
      *
      * @return Whether we should schedule an onDraw call to maintain an interactive frame rate
@@ -241,9 +277,7 @@ public sealed class Renderer(
      */
     @UiThread
     public fun invalidate() {
-        if (this::watchFaceHostApi.isInitialized) {
-            watchFaceHostApi.invalidate()
-        }
+        watchFaceHostApi?.invalidate()
     }
 
     /**
@@ -252,30 +286,41 @@ public sealed class Renderer(
      * on any thread.
      */
     public fun postInvalidate() {
-        if (this::watchFaceHostApi.isInitialized) {
-            watchFaceHostApi.getHandler().post { watchFaceHostApi.invalidate() }
-        }
+        watchFaceHostApi?.getUiThreadHandler()?.post { watchFaceHostApi!!.invalidate() }
     }
 
     @UiThread
     internal abstract fun dump(writer: IndentingPrintWriter)
 
     /**
+     * Perform UiThread specific initialization.  Will be called once during initialization before
+     * any subsequent calls to [renderInternal] or [takeScreenshot].
+     */
+    @UiThread
+    internal open fun uiThreadInitInternal() {}
+
+    /**
      * Watch faces that require [Canvas] rendering should extend their [Renderer] from this class.
      *
+     * A CanvasRenderer is expected to be constructed on the background thread associated with
+     * [WatchFaceService.getBackgroundThreadHandler] inside a call to
+     * [WatchFaceService.createWatchFace]. All rendering is be done on the UiThread. There is a
+     * memory barrier between construction and rendering so no special threading primitives are
+     * required.
+     *
      * @param surfaceHolder The [SurfaceHolder] from which a [Canvas] to will be obtained and passed
-     *     into [render].
+     * into [render].
      * @param currentUserStyleRepository The watch face's associated [CurrentUserStyleRepository].
      * @param watchState The watch face's associated [WatchState].
      * @param canvasType The type of canvas to request.
      * @param interactiveDrawModeUpdateDelayMillis The interval in milliseconds between frames in
-     *     interactive [DrawMode]s. To render at 60hz set to 16. Note when battery is low, the
-     *     frame rate will be clamped to 10fps. Watch faces are recommended to use lower frame
-     *     rates if possible for better battery life. Variable frame rates can also help preserve
-     *     battery life, e.g. if a watch face has a short animation once per second it can adjust
-     *     the frame rate inorder to sleep when not animating.
+     * interactive [DrawMode]s. To render at 60hz set to 16. Note when battery is low, the frame
+     * rate will be clamped to 10fps. Watch faces are recommended to use lower frame rates if
+     * possible for better battery life. Variable frame rates can also help preserve battery
+     * life, e.g. if a watch face has a short animation once per second it can adjust the frame
+     * rate inorder to sleep when not animating.
      */
-    public abstract class CanvasRenderer(
+    public abstract class CanvasRenderer @WorkerThread constructor(
         surfaceHolder: SurfaceHolder,
         currentUserStyleRepository: CurrentUserStyleRepository,
         watchState: WatchState,
@@ -288,20 +333,27 @@ public sealed class Renderer(
         watchState,
         interactiveDrawModeUpdateDelayMillis
     ) {
-        @SuppressWarnings("UnsafeNewApiCall") // We check if the SDK is new enough.
+        @RequiresApi(26)
+        private object Api26Impl {
+            @JvmStatic
+            @DoNotInline
+            fun callLockHardwareCanvas(surfaceHolder: SurfaceHolder): Canvas? =
+                surfaceHolder.lockHardwareCanvas()
+        }
+
         internal override fun renderInternal(
             calendar: Calendar
         ) {
             val canvas = (
-                if (canvasType == CanvasType.HARDWARE && android.os.Build.VERSION.SDK_INT >= 26) {
-                    surfaceHolder.lockHardwareCanvas() // Requires API level 26.
+                if (canvasType == CanvasType.HARDWARE && Build.VERSION.SDK_INT >= 26) {
+                    Api26Impl.callLockHardwareCanvas(surfaceHolder)
                 } else {
                     surfaceHolder.lockCanvas()
                 }
                 ) ?: return
             try {
                 if (watchState.isVisible.value) {
-                    render(canvas, surfaceHolder.surfaceFrame, calendar)
+                    renderAndComposite(canvas, calendar)
                 } else {
                     canvas.drawColor(Color.BLACK)
                 }
@@ -310,7 +362,6 @@ public sealed class Renderer(
             }
         }
 
-        /** {@inheritDoc} */
         internal override fun takeScreenshot(
             calendar: Calendar,
             renderParameters: RenderParameters
@@ -322,23 +373,84 @@ public sealed class Renderer(
             )
             val prevRenderParameters = this.renderParameters
             this.renderParameters = renderParameters
-            render(Canvas(bitmap), screenBounds, calendar)
+            renderAndComposite(Canvas(bitmap), calendar)
             this.renderParameters = prevRenderParameters
             return bitmap
         }
 
+        private fun renderAndComposite(canvas: Canvas, calendar: Calendar) {
+            // Usually renderParameters.watchFaceWatchFaceLayers will be non-empty.
+            if (renderParameters.watchFaceLayers.isNotEmpty()) {
+                render(canvas, screenBounds, calendar)
+
+                // Render and composite the HighlightLayer
+                if (renderParameters.highlightLayer != null) {
+                    val highlightLayer = Bitmap.createBitmap(
+                        screenBounds.width(),
+                        screenBounds.height(),
+                        Bitmap.Config.ARGB_8888
+                    )
+                    renderHighlightLayer(Canvas(highlightLayer), screenBounds, calendar)
+                    canvas.drawBitmap(highlightLayer, 0f, 0f, HIGHLIGHT_LAYER_COMPOSITE_PAINT)
+                    highlightLayer.recycle()
+                }
+            } else {
+                require(renderParameters.highlightLayer != null) {
+                    "We don't support empty renderParameters.watchFaceWatchFaceLayers without a " +
+                        "non-null renderParameters.highlightLayer"
+                }
+                renderHighlightLayer(canvas, screenBounds, calendar)
+            }
+        }
+
+        override fun uiThreadInitInternal() {
+            uiThreadInit()
+        }
+
         /**
-         * Sub-classes should override this to implement their rendering logic which should respect
-         * the current [DrawMode]. For correct functioning the CanvasRenderer must use the supplied
-         * [Calendar] in favor of any other ways of getting the time.
+         * Perform UiThread specific initialization.  Will be called once during initialization
+         * before any subsequent calls to [render].
+         */
+        @UiThread
+        public open fun uiThreadInit() {}
+
+        /**
+         * Sub-classes should override this to implement their watch face rendering logic which
+         * should respect the current [renderParameters]. Any highlights due to
+         * [RenderParameters.highlightLayer] should be rendered by [renderHighlightLayer] instead
+         * where possible. For correct behavior this function must use the supplied [Calendar]
+         * in favor of any other ways of getting the time.
+         *
+         * Before any calls to render, [uiThreadInit] will be called once.
          *
          * @param canvas The [Canvas] to render into. Don't assume this is always the canvas from
-         *     the [SurfaceHolder] backing the display
+         * the [SurfaceHolder] backing the display
          * @param bounds A [Rect] describing the bonds of the canvas to draw into
          * @param calendar The current [Calendar]
          */
         @UiThread
         public abstract fun render(
+            canvas: Canvas,
+            bounds: Rect,
+            calendar: Calendar
+        )
+
+        /**
+         * Sub-classes should override this to implement their watch face highlight layer rendering
+         * logic for the [RenderParameters.highlightLayer] aspect of [renderParameters]. Typically
+         * the implementation will clear [canvas] to
+         * [RenderParameters.HighlightLayer.backgroundTint] before rendering a transparent highlight
+         * or a solid outline around the [RenderParameters.HighlightLayer.highlightedElement]. This
+         * will be composited as needed on top of the results of [render]. For correct behavior this
+         * function must use the supplied [Calendar] in favor of any other ways of getting the time.
+         *
+         * @param canvas The [Canvas] to render into. Don't assume this is always the canvas from
+         * the [SurfaceHolder] backing the display
+         * @param bounds A [Rect] describing the bonds of the canvas to draw into
+         * @param calendar The current [Calendar]
+         */
+        @UiThread
+        public abstract fun renderHighlightLayer(
             canvas: Canvas,
             bounds: Rect,
             calendar: Calendar
@@ -360,24 +472,47 @@ public sealed class Renderer(
 
     /**
      * Watch faces that require [GLES20] rendering should extend their [Renderer] from this class.
-     * Before passing to the [WatchFace] constructor [initOpenGlContext] must be called.
+     *
+     * A GlesRenderer is expected to be constructed on the background thread associated with
+     * [WatchFaceService.getBackgroundThreadHandler] inside a call to
+     * [WatchFaceService.createWatchFace]. All rendering is be done on the UiThread. There is a
+     * memory barrier between construction and rendering so no special threading primitives are
+     * required.
+     *
+     * Two linked [EGLContext]s are created [eglBackgroundThreadContext] and [eglUiThreadContext]
+     * which are associated with background and UiThread respectively. OpenGL objects created on
+     * (e.g. shaders and textures) can be used on the other.
+     *
+     * If you need to make any OpenGl calls outside of [render],
+     * [onBackgroundThreadGlContextCreated] or [onUiThreadGlSurfaceCreated] then you must use either
+     * [runUiThreadGlCommands] or [runBackgroundThreadGlCommands] to execute a [Runnable] inside
+     * of the corresponding context. Access to the GL contexts this way is necessary because GL
+     * contexts are not shared between renderers and there can be multiple watch face instances
+     * existing concurrently (e.g. headless and interactive, potentially from different watch
+     * faces if an APK contains more than one [WatchFaceService]). In addition most drivers do not
+     * support concurrent access.
      *
      * @param surfaceHolder The [SurfaceHolder] whose [android.view.Surface] [render] will draw
-     *     into.
+     * into.
      * @param currentUserStyleRepository The associated [CurrentUserStyleRepository].
      * @param watchState The associated [WatchState].
      * @param interactiveDrawModeUpdateDelayMillis The interval in milliseconds between frames in
-     *     interactive [DrawMode]s. To render at 60hz set to 16. Note when battery is low, the
-     *     frame rate will be clamped to 10fps. Watch faces are recommended to use lower frame
-     *     rates if possible for better battery life. Variable frame rates can also help preserve
-     *     battery life, e.g. if a watch face has a short animation once per second it can adjust
-     *     the frame rate inorder to sleep when not animating.
+     * interactive [DrawMode]s. To render at 60hz set to 16. Note when battery is low, the frame
+     * rate will be clamped to 10fps. Watch faces are recommended to use lower frame rates if
+     * possible for better battery life. Variable frame rates can also help preserve battery life,
+     * e.g. if a watch face has a short animation once per second it can adjust the frame rate
+     * inorder to sleep when not animating.
      * @param eglConfigAttribList Attributes for [EGL14.eglChooseConfig]. By default this selects an
-     *     RGBA8888 back buffer.
+     * RGBA8888 back buffer.
      * @param eglSurfaceAttribList The attributes to be passed to [EGL14.eglCreateWindowSurface]. By
-     *     default this is empty.
+     * default this is empty.
+     * @throws [GlesException] If any GL calls fail during initialization.
      */
-    public abstract class GlesRenderer @JvmOverloads constructor(
+    public abstract class GlesRenderer
+    @Throws(GlesException::class)
+    @JvmOverloads
+    @WorkerThread
+    constructor(
         surfaceHolder: SurfaceHolder,
         currentUserStyleRepository: CurrentUserStyleRepository,
         watchState: WatchState,
@@ -394,47 +529,71 @@ public sealed class Renderer(
         /** @hide */
         private companion object {
             private const val TAG = "Gles2WatchFace"
+
+            private val glContextLock = Any()
         }
 
+        /** Exception thrown if a GL call fails */
+        public class GlesException(message: String) : Exception(message)
+
         /** The GlesRenderer's [EGLDisplay]. */
-        public var eglDisplay: EGLDisplay? = EGL14.eglGetDisplay(EGL14.EGL_DEFAULT_DISPLAY).apply {
+        public var eglDisplay: EGLDisplay = EGL14.eglGetDisplay(EGL14.EGL_DEFAULT_DISPLAY).apply {
             if (this == EGL14.EGL_NO_DISPLAY) {
-                throw RuntimeException("eglGetDisplay returned EGL_NO_DISPLAY")
+                throw GlesException("eglGetDisplay returned EGL_NO_DISPLAY")
             }
             // Initialize the display. The major and minor version numbers are passed back.
             val version = IntArray(2)
             if (!EGL14.eglInitialize(this, version, 0, version, 1)) {
-                throw RuntimeException("eglInitialize failed")
+                throw GlesException("eglInitialize failed")
             }
         }
 
         /** The GlesRenderer's [EGLConfig]. */
-        public var eglConfig: EGLConfig = chooseEglConfig(eglDisplay!!)
+        public var eglConfig: EGLConfig = chooseEglConfig(eglDisplay)
 
-        /** The GlesRenderer's [EGLContext]. */
+        /** The GlesRenderer's background Thread [EGLContext]. */
         @SuppressWarnings("SyntheticAccessor")
-        public var eglContext: EGLContext? = EGL14.eglCreateContext(
+        public lateinit var eglBackgroundThreadContext: EGLContext
+            private set
+
+        /**
+         * The GlesRenderer's UiThread [EGLContext]. Note this not available until after
+         * [WatchFaceService.createWatchFace] has completed.
+         */
+        public lateinit var eglUiThreadContext: EGLContext
+            private set
+
+        // A 1x1 surface which is needed by EGL14.eglMakeCurrent.
+        private val fakeBackgroundThreadSurface = EGL14.eglCreatePbufferSurface(
             eglDisplay,
             eglConfig,
-            EGL14.EGL_NO_CONTEXT,
-            EGL_CONTEXT_ATTRIB_LIST,
+            intArrayOf(
+                EGL14.EGL_WIDTH,
+                1,
+                EGL14.EGL_HEIGHT,
+                1,
+                EGL14.EGL_TEXTURE_TARGET,
+                EGL14.EGL_NO_TEXTURE,
+                EGL14.EGL_TEXTURE_FORMAT,
+                EGL14.EGL_NO_TEXTURE,
+                EGL14.EGL_NONE
+            ),
             0
         )
-
-        init {
-            if (eglContext == EGL14.EGL_NO_CONTEXT) {
-                throw RuntimeException("eglCreateContext failed")
-            }
-        }
-
-        private var eglSurface: EGLSurface? = null
+        private lateinit var eglSurface: EGLSurface
         private var calledOnGlContextCreated = false
-        internal var initDone = false
+        private val renderBufferTexture by lazy {
+            RenderBufferTexture(
+                surfaceHolder.surfaceFrame.width(),
+                surfaceHolder.surfaceFrame.height()
+            )
+        }
 
         /**
          * Chooses the EGLConfig to use.
-         * @throws RuntimeException if [EGL14.eglChooseConfig] fails
+         * @throws [GlesException] if [EGL14.eglChooseConfig] fails
          */
+        @Throws(GlesException::class)
         private fun chooseEglConfig(eglDisplay: EGLDisplay): EGLConfig {
             val numEglConfigs = IntArray(1)
             val eglConfigs = arrayOfNulls<EGLConfig>(1)
@@ -449,16 +608,19 @@ public sealed class Renderer(
                     0
                 )
             ) {
-                throw RuntimeException("eglChooseConfig failed")
+                throw GlesException("eglChooseConfig failed")
             }
             if (numEglConfigs[0] == 0) {
-                throw RuntimeException("no matching EGL configs")
+                throw GlesException("no matching EGL configs")
             }
             return eglConfigs[0]!!
         }
 
-        private fun createWindowSurface(width: Int, height: Int) {
-            if (eglSurface != null) {
+        @Throws(GlesException::class)
+        private fun createWindowSurface(width: Int, height: Int) = TraceEvent(
+            "GlesRenderer.createWindowSurface"
+        ).use {
+            if (this::eglSurface.isInitialized) {
                 if (!EGL14.eglDestroySurface(eglDisplay, eglSurface)) {
                     Log.w(TAG, "eglDestroySurface failed")
                 }
@@ -481,115 +643,251 @@ public sealed class Renderer(
                 )
             }
             if (eglSurface == EGL14.EGL_NO_SURFACE) {
-                throw RuntimeException("eglCreateWindowSurface failed")
+                throw GlesException("eglCreateWindowSurface failed")
             }
 
-            makeContextCurrent()
-            GLES20.glViewport(0, 0, width, height)
-            if (!calledOnGlContextCreated) {
-                calledOnGlContextCreated = true
-                onGlContextCreated()
+            runUiThreadGlCommands {
+                GLES20.glViewport(0, 0, width, height)
+                if (!calledOnGlContextCreated) {
+                    calledOnGlContextCreated = true
+                }
+                TraceEvent("GlesRenderer.onGlSurfaceCreated").use {
+                    onUiThreadGlSurfaceCreated(width, height)
+                }
             }
-            onGlSurfaceCreated(width, height)
         }
 
         @CallSuper
         override fun onDestroy() {
-            if (eglSurface != null) {
+            if (this::eglSurface.isInitialized) {
                 if (!EGL14.eglDestroySurface(eglDisplay, eglSurface)) {
                     Log.w(TAG, "eglDestroySurface failed")
                 }
-                eglSurface = null
             }
-            if (eglContext != null) {
-                if (!EGL14.eglDestroyContext(eglDisplay, eglContext)) {
-                    Log.w(TAG, "eglDestroyContext failed")
-                }
-                eglContext = null
+            if (!EGL14.eglDestroyContext(eglDisplay, eglUiThreadContext)) {
+                Log.w(TAG, "eglDestroyContext failed")
             }
-            if (eglDisplay != null) {
-                if (!EGL14.eglTerminate(eglDisplay)) {
-                    Log.w(TAG, "eglTerminate failed")
-                }
-                eglDisplay = null
+            if (!EGL14.eglDestroyContext(eglDisplay, eglBackgroundThreadContext)) {
+                Log.w(TAG, "eglDestroyContext failed")
+            }
+            if (!EGL14.eglTerminate(eglDisplay)) {
+                Log.w(TAG, "eglTerminate failed")
             }
         }
 
         /**
-         * Sets our GL context to be the current one. This method *must* be called before any OpenGL
-         * APIs are used.
+         * Inside of a synchronized block this function sets the GL context associated with the
+         * [WatchFaceService.getBackgroundThreadHandler]'s looper thread as the current one,
+         * executes [runnable] and finally unsets the GL context.
+         *
+         * Access to the GL context this way is necessary because GL contexts are not shared
+         * between renderers and there can be multiple watch face instances existing concurrently
+         * (e.g. headless and interactive, potentially from different watch faces if an APK
+         * contains more than one [WatchFaceService]).
+         *
+         * NB this function is called by the library before running
+         * [runBackgroundThreadGlCommands] so there's no need to use this directly in client
+         * code unless you need to make GL calls outside of those methods.
+         *
+         * @throws [IllegalStateException] if the calls to [EGL14.eglMakeCurrent] fails
          */
-        private fun makeContextCurrent() {
-            if (!EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)) {
-                throw RuntimeException("eglMakeCurrent failed")
+        @WorkerThread
+        public fun runBackgroundThreadGlCommands(runnable: Runnable) {
+            require(
+                watchFaceHostApi == null ||
+                    watchFaceHostApi!!.getBackgroundThreadHandler().looper.isCurrentThread
+            ) {
+                "runBackgroundThreadGlCommands must be called from the Background Thread"
             }
-        }
-
-        /**
-         * Initializes the GlesRenderer, and calls [onGlSurfaceCreated]. It is an error to construct
-         * a [WatchFace] before this method has been called.
-         */
-        @UiThread
-        public fun initOpenGlContext() {
-            surfaceHolder.addCallback(object : SurfaceHolder.Callback {
-                @SuppressLint("SyntheticAccessor")
-                override fun surfaceChanged(
-                    holder: SurfaceHolder,
-                    format: Int,
-                    width: Int,
-                    height: Int
+            // It's only safe to run GL command from one thread at a time.
+            synchronized(glContextLock) {
+                if (!EGL14.eglMakeCurrent(
+                        eglDisplay,
+                        fakeBackgroundThreadSurface,
+                        fakeBackgroundThreadSurface,
+                        eglBackgroundThreadContext
+                    )
                 ) {
-                    createWindowSurface(width, height)
+                    throw IllegalStateException(
+                        "eglMakeCurrent failed, glGetError() = " + GLES20.glGetError()
+                    )
                 }
 
-                @SuppressLint("SyntheticAccessor")
-                override fun surfaceDestroyed(holder: SurfaceHolder) {
-                    if (!EGL14.eglDestroySurface(eglDisplay, eglSurface)) {
-                        Log.w(TAG, "eglDestroySurface failed")
-                    }
-                    eglSurface = null
+                try {
+                    runnable.run()
+                } finally {
+                    EGL14.eglMakeCurrent(
+                        eglDisplay,
+                        EGL14.EGL_NO_SURFACE,
+                        EGL14.EGL_NO_SURFACE,
+                        EGL14.EGL_NO_CONTEXT
+                    )
                 }
-
-                override fun surfaceCreated(holder: SurfaceHolder) {
-                }
-            })
-
-            // Note we have to call this after the derived class's init() method has run or it's
-            // typically going to fail because members have not been initialized.
-            createWindowSurface(
-                surfaceHolder.surfaceFrame.width(),
-                surfaceHolder.surfaceFrame.height()
-            )
-
-            initDone = true
-        }
-
-        /** Called when a new GL context is created. It's safe to use GL APIs in this method. */
-        @UiThread
-        public open fun onGlContextCreated() {
+            }
         }
 
         /**
-         * Called when a new GL surface is created. It's safe to use GL APIs in this method.
+         * Initializes the GlesRenderer, and calls [onUiThreadGlSurfaceCreated]. It is an error to
+         * construct a [WatchFace] before this method has been called.
+         *
+         * @throws [GlesException] If any GL calls fail.
+         */
+        @UiThread
+        @Throws(GlesException::class)
+        internal fun initBackgroundThreadOpenGlContext() =
+            TraceEvent("GlesRenderer.initBackgroundThreadOpenGlContext").use {
+                eglBackgroundThreadContext = EGL14.eglCreateContext(
+                    eglDisplay,
+                    eglConfig,
+                    EGL14.EGL_NO_CONTEXT,
+                    EGL_CONTEXT_ATTRIB_LIST,
+                    0
+                )
+                if (eglBackgroundThreadContext == EGL14.EGL_NO_CONTEXT) {
+                    throw RuntimeException("eglCreateContext failed")
+                }
+
+                runBackgroundThreadGlCommands {
+                    TraceEvent("GlesRenderer.onGlContextCreated").use {
+                        onBackgroundThreadGlContextCreated()
+                    }
+                }
+            }
+
+        /**
+         * Inside of a synchronized block this function sets the UiThread GL context as the current
+         * one, executes [runnable] and finally unsets the GL context.
+         *
+         * Access to the GL context this way is necessary because GL contexts are not shared
+         * between renderers and there can be multiple watch face instances existing concurrently
+         * (e.g. headless and interactive, potentially from different watch faces if an APK
+         * contains more than one [WatchFaceService]).
+         *
+         * NB this function is called by the library before running [render] or
+         * [onUiThreadGlSurfaceCreated] so there's no need to use this directly in client code
+         * unless you need to make GL calls outside of those methods.
+         *
+         * @throws [IllegalStateException] if the calls to [EGL14.eglMakeCurrent] fails
+         */
+        @UiThread
+        public fun runUiThreadGlCommands(runnable: Runnable) {
+            require(watchFaceHostApi!!.getUiThreadHandler().looper.isCurrentThread) {
+                "runUiThreadGlCommands must be called from the UiThread"
+            }
+            // It's only safe to run GL command from one thread at a time.
+            synchronized(glContextLock) {
+                if (!EGL14.eglMakeCurrent(
+                        eglDisplay,
+                        eglSurface,
+                        eglSurface,
+                        eglUiThreadContext
+                    )
+                ) {
+                    throw IllegalStateException(
+                        "eglMakeCurrent failed, glGetError() = " + GLES20.glGetError()
+                    )
+                }
+
+                try {
+                    runnable.run()
+                } finally {
+                    EGL14.eglMakeCurrent(
+                        eglDisplay,
+                        EGL14.EGL_NO_SURFACE,
+                        EGL14.EGL_NO_SURFACE,
+                        EGL14.EGL_NO_CONTEXT
+                    )
+                }
+            }
+        }
+
+        /**
+         * Initializes the GlesRenderer, and calls [onUiThreadGlSurfaceCreated]. It is an error to
+         * construct a [WatchFace] before this method has been called.
+         *
+         * @throws [GlesException] If any GL calls fail.
+         */
+        @UiThread
+        @Throws(GlesException::class)
+        internal override fun uiThreadInitInternal() =
+            TraceEvent("GlesRenderer.initUiThreadOpenGlContext").use {
+                eglUiThreadContext = EGL14.eglCreateContext(
+                    eglDisplay,
+                    eglConfig,
+                    eglBackgroundThreadContext,
+                    intArrayOf(
+                        EGL14.EGL_CONTEXT_CLIENT_VERSION,
+                        2,
+                        EGL14.EGL_NONE
+                    ),
+                    0
+                )
+
+                surfaceHolder.addCallback(object : SurfaceHolder.Callback {
+                    @SuppressLint("SyntheticAccessor")
+                    override fun surfaceChanged(
+                        holder: SurfaceHolder,
+                        format: Int,
+                        width: Int,
+                        height: Int
+                    ) {
+                        createWindowSurface(width, height)
+                    }
+
+                    @SuppressLint("SyntheticAccessor")
+                    override fun surfaceDestroyed(holder: SurfaceHolder) {
+                        if (this@GlesRenderer::eglSurface.isInitialized) {
+                            if (!EGL14.eglDestroySurface(eglDisplay, eglSurface)) {
+                                Log.w(TAG, "eglDestroySurface failed")
+                            }
+                        }
+                    }
+
+                    override fun surfaceCreated(holder: SurfaceHolder) {
+                    }
+                })
+
+                // Note we have to call this after the derived class's init() method has run or it's
+                // typically going to fail because members have not been initialized.
+                createWindowSurface(
+                    surfaceHolder.surfaceFrame.width(),
+                    surfaceHolder.surfaceFrame.height()
+                )
+            }
+
+        /**
+         * Called once a background thread when a new GL context is created on the background
+         * thread, before any subsequent calls to [render]. Note this function is called inside a
+         * lambda passed to [runBackgroundThreadGlCommands] which has synchronized access to the
+         * GL context.
+         */
+        @WorkerThread
+        public open fun onBackgroundThreadGlContextCreated() {
+        }
+
+        /**
+         * Called once when a new GL surface is created on the UiThread, before any subsequent calls
+         * to [render]. Note this function is called inside a lambda passed to
+         * [runUiThreadGlCommands] which has synchronized access to the GL context.
          *
          * @param width width of surface in pixels
          * @param height height of surface in pixels
          */
         @UiThread
-        public open fun onGlSurfaceCreated(@Px width: Int, @Px height: Int) {
+        public open fun onUiThreadGlSurfaceCreated(@Px width: Int, @Px height: Int) {
         }
 
         internal override fun renderInternal(
             calendar: Calendar
         ) {
-            makeContextCurrent()
-            render(calendar)
-            if (!EGL14.eglSwapBuffers(eglDisplay, eglSurface)) {
-                Log.w(TAG, "eglSwapBuffers failed")
+            runUiThreadGlCommands {
+                renderAndComposite(calendar)
+                if (!EGL14.eglSwapBuffers(eglDisplay, eglSurface)) {
+                    Log.w(TAG, "eglSwapBuffers failed")
+                }
             }
         }
 
-        /** {@inheritDoc} */
         internal override fun takeScreenshot(
             calendar: Calendar,
             renderParameters: RenderParameters
@@ -597,27 +895,54 @@ public sealed class Renderer(
             val width = screenBounds.width()
             val height = screenBounds.height()
             val pixelBuf = ByteBuffer.allocateDirect(width * height * 4)
-            makeContextCurrent()
-            val prevRenderParameters = this.renderParameters
-            this.renderParameters = renderParameters
-            render(calendar)
-            this.renderParameters = prevRenderParameters
-            GLES20.glFinish()
-            GLES20.glReadPixels(
-                0,
-                0,
-                width,
-                height,
-                GLES20.GL_RGBA,
-                GLES20.GL_UNSIGNED_BYTE,
-                pixelBuf
-            )
-            // The image is flipped when using read pixels because the first pixel in the OpenGL
-            // buffer is in bottom left.
-            verticalFlip(pixelBuf, width, height)
             val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-            bitmap.copyPixelsFromBuffer(pixelBuf)
+            runUiThreadGlCommands {
+                val prevRenderParameters = this.renderParameters
+                this.renderParameters = renderParameters
+                renderAndComposite(calendar)
+                this.renderParameters = prevRenderParameters
+                GLES20.glFinish()
+                GLES20.glReadPixels(
+                    0,
+                    0,
+                    width,
+                    height,
+                    GLES20.GL_RGBA,
+                    GLES20.GL_UNSIGNED_BYTE,
+                    pixelBuf
+                )
+                // The image is flipped when using read pixels because the first pixel in the OpenGL
+                // buffer is in bottom left.
+                verticalFlip(pixelBuf, width, height)
+                bitmap.copyPixelsFromBuffer(pixelBuf)
+            }
             return bitmap
+        }
+
+        private fun renderAndComposite(calendar: Calendar) {
+            GLES20.glBlendFunc(GLES20.GL_ONE, GLES20.GL_ZERO)
+
+            // Usually renderParameters.watchFaceWatchFaceLayers will be non-empty.
+            if (renderParameters.watchFaceLayers.isNotEmpty()) {
+                render(calendar)
+
+                // Render and composite the HighlightLayer
+                if (renderParameters.highlightLayer != null) {
+                    renderBufferTexture.bindFrameBuffer()
+                    GLES20.glBlendFunc(GLES20.GL_ONE, GLES20.GL_ZERO)
+                    renderHighlightLayer(calendar)
+                    GLES20.glFlush()
+
+                    GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0)
+                    renderBufferTexture.compositeQuad()
+                }
+            } else {
+                require(renderParameters.highlightLayer != null) {
+                    "We don't support empty renderParameters.watchFaceWatchFaceLayers without a " +
+                        "non-null renderParameters.highlightLayer"
+                }
+                renderHighlightLayer(calendar)
+            }
         }
 
         private fun verticalFlip(
@@ -648,14 +973,45 @@ public sealed class Renderer(
         }
 
         /**
-         * Sub-classes should override this to implement their rendering logic which should respect
-         * the current [DrawMode]. For correct functioning the GlesRenderer must use the supplied
-         * [Calendar] in favor of any other ways of getting the time.
+         * Sub-classes should override this to implement their watch face rendering logic which
+         * should respect the current [renderParameters]. Any highlights due to
+         * [RenderParameters.highlightLayer] should be rendered by [renderHighlightLayer] instead
+         * where possible. For correct behavior this function must use the supplied [Calendar]
+         * in favor of any other ways of getting the time.
+         *
+         * Note this function is called inside a lambda passed to [runUiThreadGlCommands] which
+         * has synchronized access to the GL context.
+         *
+         * Note also `GLES20.glBlendFunc(GLES20.GL_ONE, GLES20.GL_ZERO)` is called by the library
+         * before this method.
+         *
+         * Before any calls to this function [onBackgroundThreadGlContextCreated] and
+         * [onUiThreadGlSurfaceCreated] will have been called once on their respective threads.
          *
          * @param calendar The current [Calendar]
          */
         @UiThread
         public abstract fun render(calendar: Calendar)
+
+        /**
+         * Sub-classes should override this to implement their watch face highlight layer rendering
+         * logic for the [RenderParameters.highlightLayer] aspect of [renderParameters]. Typically
+         * the implementation will clear the buffer to
+         * [RenderParameters.HighlightLayer.backgroundTint] before rendering a transparent highlight
+         * or a solid outline around the [RenderParameters.HighlightLayer.highlightedElement]. This
+         * will be composited as needed on top of the results of [render]. For correct behavior this
+         * function must use the supplied [Calendar] in favor of any other ways of getting the time.
+         *
+         * Note this function is called inside a lambda passed to [runUiThreadGlCommands] which
+         * has synchronized access to the GL context.
+         *
+         * Note also `GLES20.glBlendFunc(GLES20.GL_ONE, GLES20.GL_ZERO)` is called by the library
+         * before this method.
+         *
+         * @param calendar The current [Calendar]
+         */
+        @UiThread
+        public abstract fun renderHighlightLayer(calendar: Calendar)
 
         internal override fun dump(writer: IndentingPrintWriter) {
             writer.println("GlesRenderer:")

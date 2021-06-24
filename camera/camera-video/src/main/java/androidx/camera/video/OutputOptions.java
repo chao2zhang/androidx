@@ -23,16 +23,24 @@ import androidx.annotation.NonNull;
  */
 public abstract class OutputOptions {
 
-    Type mType;
+    /** Represents an unbound file size. */
+    public static final int FILE_SIZE_UNLIMITED = 0;
 
-    public OutputOptions(@NonNull Type type) {
+    private final Type mType;
+
+    OutputOptions(@NonNull Type type) {
         mType = type;
     }
 
     /**
-     * To be used to cast OutputOptions to subtype.
+     * Returns the subclass type of this output options.
+     *
+     * <p>The type can be used to determine which class cast the output options to in order to
+     * obtain more detailed information about the particular output destination.
+     * @see Type
      */
-    Type getType() {
+    @NonNull
+    public Type getType() {
         return mType;
     }
 
@@ -42,9 +50,17 @@ public abstract class OutputOptions {
     public abstract int getFileSizeLimit();
 
     /**
-     * Types of the output options.
+     * Type of the output options.
+     *
+     * <p>Output options are limited to a distinct number of subclasses. Each subclass is
+     * represented by a type.
      */
-    enum Type {
-        FILE, FILE_DESCRIPTOR, MEDIA_STORE
+    public enum Type {
+        /** Output options of {@link FileOutputOptions}. */
+        FILE,
+        /** Output options of {@link FileDescriptorOutputOptions}. */
+        FILE_DESCRIPTOR,
+        /** Output options of {@link MediaStoreOutputOptions}. */
+        MEDIA_STORE
     }
 }

@@ -46,8 +46,8 @@ public class UserStyle(
      * settings default option.
      *
      * @param userStyle The [UserStyle] represented as a [UserStyleData].
-     * @param styleSchema The  for this UserStyle, describes how we interpret
-     *     [userStyle].
+     * @param styleSchema The [UserStyleSchema] for this UserStyle, describes how we interpret
+     * [userStyle].
      */
     public constructor(
         userStyle: UserStyleData,
@@ -59,7 +59,7 @@ public class UserStyle(
                 if (option != null) {
                     this[styleSetting] = styleSetting.getSettingOptionForId(option)
                 } else {
-                    this[styleSetting] = styleSetting.getDefaultOption()
+                    this[styleSetting] = styleSetting.defaultOption
                 }
             }
         }
@@ -82,7 +82,7 @@ public class UserStyle(
 
     override fun toString(): String =
         "[" + selectedOptions.entries.joinToString(
-            transform = { it.key.id.value + " -> " + it.value.id.value }
+            transform = { "${it.key.id} -> ${it.value}" }
         ) + "]"
 }
 
@@ -99,43 +99,82 @@ public class UserStyleData(
         userStyle: UserStyleWireFormat
     ) : this(userStyle.mUserStyle)
 
-    override fun toString(): String = "{" + userStyleMap.map {
-        try {
-            it.key + "=" + it.value.decodeToString()
-        } catch (e: Exception) {
-            it.key + "=" + it.value
+    override fun toString(): String = "{" + userStyleMap.entries.joinToString(
+        transform = {
+            try {
+                it.key + "=" + it.value.decodeToString()
+            } catch (e: Exception) {
+                it.key + "=" + it.value
+            }
         }
-    }.joinToString() + "}"
+    ) + "}"
 
     /** @hide */
     @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP_PREFIX)
     public fun toWireFormat(): UserStyleWireFormat = UserStyleWireFormat(userStyleMap)
+
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (javaClass != other?.javaClass) return false
+
+        other as UserStyleData
+
+        // Check if references are the same.
+        if (userStyleMap == other.userStyleMap) return true
+
+        // Check if contents are the same.
+        if (userStyleMap.size != other.userStyleMap.size) return false
+
+        for ((key, value) in userStyleMap) {
+            val otherValue = other.userStyleMap[key] ?: return false
+            if (!otherValue.contentEquals(value)) return false
+        }
+
+        return true
+    }
+
+    override fun hashCode(): Int {
+        return userStyleMap.hashCode()
+    }
 }
 
 /**
  * Describes the list of [UserStyleSetting]s the user can configure.
  *
- * @param userStyleSettings The user configurable style categories associated with this watch
- *     face. Empty if the watch face doesn't support user styling.
+ * @param userStyleSettings The user configurable style categories associated with this watch face.
+ * Empty if the watch face doesn't support user styling. Note we allow at most one
+ * [UserStyleSetting.ComplicationSlotsUserStyleSetting] and one
+ * [UserStyleSetting.CustomValueUserStyleSetting]
+ * in the list.
  */
 public class UserStyleSchema(
     public val userStyleSettings: List<UserStyleSetting>
 ) {
     init {
+        var complicationSlotsUserStyleSettingCount = 0
         var customValueUserStyleSettingCount = 0
         for (setting in userStyleSettings) {
-            if (setting is UserStyleSetting.CustomValueUserStyleSetting) {
-                customValueUserStyleSettingCount++
+            when (setting) {
+                is UserStyleSetting.ComplicationSlotsUserStyleSetting ->
+                    complicationSlotsUserStyleSettingCount++
+
+                is UserStyleSetting.CustomValueUserStyleSetting ->
+                    customValueUserStyleSettingCount++
             }
+        }
+
+        // This requirement makes it easier to implement companion editors.
+        require(complicationSlotsUserStyleSettingCount <= 1) {
+            "At most only one ComplicationSlotsUserStyleSetting is allowed"
         }
 
         // There's a hard limit to how big Schema + UserStyle can be and since this data is sent
         // over bluetooth to the companion there will be performance issues well before we hit
         // that the limit. As a result we want the total size of custom data to be kept small and
         // we are initially restricting there to be at most one CustomValueUserStyleSetting.
-        require(
-            customValueUserStyleSettingCount <= 1
-        ) { "At most only one CustomValueUserStyleSetting is allowed" }
+        require(customValueUserStyleSettingCount <= 1) {
+            "At most only one CustomValueUserStyleSetting is allowed"
+        }
     }
 
     /** @hide */
@@ -158,7 +197,7 @@ public class UserStyleSchema(
  * [UserStyleSchema].
  *
  * @param schema The [UserStyleSchema] for this CurrentUserStyleRepository which describes the
- *     available style categories.
+ * available style categories.
  */
 public class CurrentUserStyleRepository(
     public val schema: UserStyleSchema
@@ -181,7 +220,7 @@ public class CurrentUserStyleRepository(
     public var userStyle: UserStyle = UserStyle(
         HashMap<UserStyleSetting, UserStyleSetting.Option>().apply {
             for (setting in schema.userStyleSettings) {
-                this[setting] = setting.getDefaultOption()
+                this[setting] = setting.defaultOption
             }
         }
     )

@@ -2,8 +2,6 @@ import androidx.build.LibraryGroups
 import androidx.build.LibraryVersions
 import androidx.build.Publish
 
-import static androidx.build.dependencies.DependenciesKt.*
-
 plugins {
     id("AndroidXPlugin")
     id("com.android.library")
@@ -35,23 +33,27 @@ android {
 dependencies {
     api(project(":emoji2:emoji2"))
 
-    androidTestImplementation(ANDROIDX_TEST_EXT_JUNIT)
-    androidTestImplementation(ANDROIDX_TEST_CORE)
-    androidTestImplementation(ANDROIDX_TEST_RUNNER)
-    androidTestImplementation(ANDROIDX_TEST_RULES)
-    androidTestImplementation(ESPRESSO_CORE, libs.exclude_for_espresso)
-    androidTestImplementation(MOCKITO_CORE, libs.exclude_bytebuddy) // DexMaker has it"s own MockMaker
-    androidTestImplementation(DEXMAKER_MOCKITO, libs.exclude_bytebuddy) // DexMaker has it"s own MockMaker
+    androidTestImplementation(libs.testExtJunit)
+    androidTestImplementation(libs.testCore)
+    androidTestImplementation(libs.testRunner)
+    androidTestImplementation(libs.testRules)
+    androidTestImplementation(libs.espressoCore, excludes.espresso)
+    androidTestImplementation(libs.mockitoCore, excludes.bytebuddy) // DexMaker has it"s own MockMaker
+    androidTestImplementation(libs.dexmakerMockito, excludes.bytebuddy) // DexMaker has it"s own MockMaker
     androidTestImplementation project(':internal-testutils-runtime')
+
+    // view tests that use font are in this module as well; for licensing reasons
+    androidTestImplementation project(":emoji2:emoji2-views")
 }
 
 androidx {
     name = "Android Emoji2 Compat"
-    publish = Publish.NONE
+    publish = Publish.SNAPSHOT_AND_RELEASE
     mavenVersion = LibraryVersions.EMOJI2
     mavenGroup = LibraryGroups.EMOJI2
     inceptionYear = "2017"
-    description = "Library bundled with assets to enable emoji compatibility in Kitkat and newer devices to avoid the empty emoji characters."
+    description = "Library bundled with assets to enable emoji compatibility in Kitkat and newer " +
+            "devices to avoid the empty emoji characters."
 
     license {
         name = "SIL Open Font License, Version 1.1"

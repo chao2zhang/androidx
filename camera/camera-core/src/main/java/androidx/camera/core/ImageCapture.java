@@ -113,12 +113,15 @@ import androidx.camera.core.impl.utils.futures.Futures;
 import androidx.camera.core.internal.IoConfig;
 import androidx.camera.core.internal.TargetConfig;
 import androidx.camera.core.internal.YuvToJpegProcessor;
+import androidx.camera.core.internal.compat.quirk.DeviceQuirks;
+import androidx.camera.core.internal.compat.quirk.ImageCaptureWashedOutImageQuirk;
 import androidx.camera.core.internal.compat.quirk.SoftwareJpegEncodingPreferredQuirk;
 import androidx.camera.core.internal.compat.workaround.ExifRotationAvailability;
 import androidx.camera.core.internal.utils.ImageUtil;
 import androidx.concurrent.futures.CallbackToFutureAdapter;
 import androidx.core.util.Consumer;
 import androidx.core.util.Preconditions;
+import androidx.lifecycle.LifecycleOwner;
 
 import com.google.common.util.concurrent.ListenableFuture;
 
@@ -303,6 +306,14 @@ public final class ImageCapture extends UseCase {
      */
     private boolean mUseSoftwareJpeg = false;
 
+    /**
+     * Whether the torch flash will be used.
+     *
+     * <p>When the flag is set, torch will be opened and closed to replace the flash fired by flash
+     * mode.
+     */
+    private final boolean mUseTorchFlash;
+
     ////////////////////////////////////////////////////////////////////////////////////////////
     // [UseCase attached dynamic] - Can change but is only available when the UseCase is attached.
     ////////////////////////////////////////////////////////////////////////////////////////////
@@ -350,6 +361,11 @@ public final class ImageCapture extends UseCase {
             mEnableCheck3AConverged = true; // check 3A convergence in MAX_QUALITY mode
         } else {
             mEnableCheck3AConverged = false; // skip 3A convergence in MIN_LATENCY mode
+        }
+
+        mUseTorchFlash = DeviceQuirks.get(ImageCaptureWashedOutImageQuirk.class) != null;
+        if (mUseTorchFlash) {
+            Logger.d(TAG, "Open and close torch to replace the flash fired by flash mode.");
         }
     }
 
@@ -521,7 +537,7 @@ public final class ImageCapture extends UseCase {
     @RestrictTo(Scope.LIBRARY_GROUP)
     @NonNull
     @Override
-    UseCaseConfig<?> onMergeConfig(@NonNull CameraInfoInternal cameraInfo,
+    protected UseCaseConfig<?> onMergeConfig(@NonNull CameraInfoInternal cameraInfo,
             @NonNull UseCaseConfig.Builder<?, ?, ?> builder) {
         if (builder.getUseCaseConfig().retrieveOption(OPTION_CAPTURE_PROCESSOR, null)
                 != null && Build.VERSION.SDK_INT >= 29) {
@@ -758,6 +774,63 @@ public final class ImageCapture extends UseCase {
     @CaptureMode
     public int getCaptureMode() {
         return mCaptureMode;
+    }
+
+    /**
+     * Gets selected resolution information of the {@link ImageCapture}.
+     *
+     * <p>The returned {@link ResolutionInfo} will be expressed in the coordinates of the camera
+     * sensor. Note that the resolution might not be the same as the resolution of the received
+     * image by calling {@link #takePicture} because the received image might have been rotated
+     * to the upright orientation using the target rotation setting by the device.
+     *
+     * <p>The resolution information might change if the use case is unbound and then rebound,
+     * {@link #setTargetRotation(int)} is called to change the target rotation setting, or
+     * {@link #setCropAspectRatio(Rational)} is called to change the crop aspect ratio setting.
+     * The application needs to call {@link #getResolutionInfo()} again to get the latest
+     * {@link ResolutionInfo} for the changes.
+     *
+     * @return the resolution information if the use case has been bound by the
+     * {@link androidx.camera.lifecycle.ProcessCameraProvider#bindToLifecycle(LifecycleOwner
+     * , CameraSelector, UseCase...)} API, or null if the use case is not bound yet.
+     */
+    @Nullable
+    @Override
+    public ResolutionInfo getResolutionInfo() {
+        return super.getResolutionInfo();
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * @hide
+     */
+    @RestrictTo(Scope.LIBRARY_GROUP)
+    @Nullable
+    @Override
+    protected ResolutionInfo getResolutionInfoInternal() {
+        CameraInternal camera = getCamera();
+        Size resolution = getAttachedSurfaceResolution();
+
+        if (camera == null || resolution == null) {
+            return null;
+        }
+
+        Rect cropRect = getViewPortCropRect();
+
+        Rational cropAspectRatio = mCropAspectRatio;
+
+        if (cropRect == null) {
+            if (cropAspectRatio != null) {
+                cropRect = ImageUtil.computeCropRectFromAspectRatio(resolution, cropAspectRatio);
+            } else {
+                cropRect = new Rect(0, 0, resolution.getWidth(), resolution.getHeight());
+            }
+        }
+
+        int rotationDegrees = getRelativeRotation(camera);
+
+        return ResolutionInfo.create(resolution, cropRect, rotationDegrees);
     }
 
     /**
@@ -1320,9 +1393,12 @@ public final class ImageCapture extends UseCase {
                 .transformAsync(captureResult -> {
                     state.mPreCaptureState = captureResult;
                     triggerAfIfNeeded(state);
-                    if (isAePrecaptureRequired(state)) {
-                        // trigger AE precapture and await the result.
-                        return triggerAePrecapture(state);
+                    if (isFlashRequired(state)) {
+                        if (mUseTorchFlash) {
+                            return openTorch(state);
+                        } else {
+                            return triggerAePrecapture(state);
+                        }
                     }
                     return Futures.immediateFuture(null);
                 }, mExecutor)
@@ -1337,8 +1413,35 @@ public final class ImageCapture extends UseCase {
      * <p>For example, cancel 3A scan, close torch if necessary.
      */
     void postTakePicture(final TakePictureState state) {
+        closeTorch(state);
         cancelAfAeTrigger(state);
         unlockFlashMode();
+    }
+
+    @NonNull
+    private ListenableFuture<Void> openTorch(@NonNull TakePictureState state) {
+        CameraInternal camera = getCamera();
+        if (camera != null && camera.getCameraInfo().getTorchState().getValue() == TorchState.ON) {
+            // Torch is already opened.
+            return Futures.immediateFuture(null);
+        }
+
+        Logger.d(TAG, "openTorch");
+
+        // Create a new future in order to ignore any fail from CameraControl.enableTorch().
+        return CallbackToFutureAdapter.getFuture(completer -> {
+            getCameraControl().enableTorch(state.mIsTorchOpened = true).addListener(
+                    () -> completer.set(null), CameraXExecutors.directExecutor());
+            return "openTorch";
+        });
+    }
+
+    private void closeTorch(@NonNull TakePictureState state) {
+        if (state.mIsTorchOpened) {
+            // Add listener to avoid FutureReturnValueIgnored error.
+            getCameraControl().enableTorch(state.mIsTorchOpened = false).addListener(() -> {
+            }, CameraXExecutors.directExecutor());
+        }
     }
 
     /**
@@ -1373,7 +1476,7 @@ public final class ImageCapture extends UseCase {
         return Futures.immediateFuture(null);
     }
 
-    boolean isAePrecaptureRequired(TakePictureState state) {
+    boolean isFlashRequired(@NonNull TakePictureState state) {
         switch (getFlashMode()) {
             case FLASH_MODE_ON:
                 return true;
@@ -1386,9 +1489,7 @@ public final class ImageCapture extends UseCase {
     }
 
     ListenableFuture<Boolean> check3AConverged(TakePictureState state) {
-        // Skip the 3A converged check if enableCheck3AConverged is false and AE precapture is
-        // not triggered.
-        if (!mEnableCheck3AConverged && !state.mIsAePrecaptureTriggered) {
+        if (!mEnableCheck3AConverged && !state.mIsAePrecaptureTriggered && !state.mIsTorchOpened) {
             return Futures.immediateFuture(false);
         }
 
@@ -1467,10 +1568,12 @@ public final class ImageCapture extends UseCase {
     }
 
     /** Issues a request to start auto exposure scan. */
-    ListenableFuture<CameraCaptureResult> triggerAePrecapture(TakePictureState state) {
+    ListenableFuture<Void> triggerAePrecapture(TakePictureState state) {
         Logger.d(TAG, "triggerAePrecapture");
         state.mIsAePrecaptureTriggered = true;
-        return getCameraControl().triggerAePrecapture();
+        // Transform type from CameraCaptureResult to Void
+        return Futures.transform(getCameraControl().triggerAePrecapture(), captureResult -> null,
+                CameraXExecutors.directExecutor());
     }
 
     /** Issues a request to cancel auto focus and/or auto exposure scan. */
@@ -1826,8 +1929,8 @@ public final class ImageCapture extends UseCase {
         }
 
         /**
-         * Exposed internally so that CameraView can overwrite the flip horizontal flag for front
-         * camera. External core API users shouldn't need this be cause they are the one who
+         * Exposed internally so that CameraController can overwrite the flip horizontal flag for
+         * front camera. External core API users shouldn't need this because they are the ones who
          * created the {@link Metadata}.
          *
          * @hide
@@ -2059,6 +2162,7 @@ public final class ImageCapture extends UseCase {
      */
     static final class TakePictureState {
         CameraCaptureResult mPreCaptureState = EmptyCameraCaptureResult.create();
+        boolean mIsTorchOpened = false;
         boolean mIsAfTriggered = false;
         boolean mIsAePrecaptureTriggered = false;
     }

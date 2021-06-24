@@ -37,16 +37,21 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.FocusManager
 import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.isFocused
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Paint
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.layout.FirstBaseline
+import androidx.compose.ui.layout.IntrinsicMeasurable
+import androidx.compose.ui.layout.IntrinsicMeasureScope
 import androidx.compose.ui.layout.LastBaseline
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.Measurable
+import androidx.compose.ui.layout.MeasurePolicy
+import androidx.compose.ui.layout.MeasureResult
+import androidx.compose.ui.layout.MeasureScope
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalDensity
@@ -83,6 +88,7 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.TextInputService
 import androidx.compose.ui.text.input.TextInputSession
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Density
 import kotlin.math.max
 import kotlin.math.roundToInt
@@ -118,7 +124,10 @@ import kotlin.math.roundToInt
  * @param textStyle Style configuration that applies at character level such as color, font etc.
  * @param visualTransformation The visual transformation filter for changing the visual
  * representation of the input. By default no visual transformation is applied.
- * @param onTextLayout Callback that is executed when a new text layout is calculated.
+ * @param onTextLayout Callback that is executed when a new text layout is calculated. A
+ * [TextLayoutResult] object that callback provides contains paragraph information, size of the
+ * text, baselines and other details. The callback can be used to add additional decoration or
+ * functionality to the text. For example, to draw a cursor or selection around the text.
  * @param interactionSource the [MutableInteractionSource] representing the stream of
  * [Interaction]s for this CoreTextField. You can create and pass in your own remembered
  * [MutableInteractionSource] if you want to observe [Interaction]s and customize the
@@ -231,7 +240,10 @@ internal fun CoreTextField(
     // notify the EditProcessor of value every recomposition
     state.processor.reset(value, state.inputSession)
 
-    val manager = remember { TextFieldSelectionManager() }
+    val undoManager = remember { UndoManager() }
+    undoManager.snapshotIfNeeded(value)
+
+    val manager = remember { TextFieldSelectionManager(undoManager) }
     manager.offsetMapping = offsetMapping
     manager.visualTransformation = visualTransformation
     manager.onValueChange = onValueChangeWrapper
@@ -268,10 +280,9 @@ internal fun CoreTextField(
         if (!it.isFocused) manager.deselect()
     }
 
-    val selectionModifier =
-        Modifier.longPressDragGestureFilter(manager.touchSelectionObserver, enabled)
-
     val pointerModifier = if (isInTouchMode) {
+        val selectionModifier =
+            Modifier.longPressDragGestureFilter(manager.touchSelectionObserver, enabled)
         Modifier.tapPressTextFieldModifier(interactionSource, enabled) { offset ->
             tapToFocus(state, focusRequester, !readOnly)
             if (state.hasFocus) {
@@ -291,7 +302,10 @@ internal fun CoreTextField(
             }
         }.then(selectionModifier)
     } else {
-        Modifier.mouseDragGestureDetector(manager::mouseSelectionDetector, enabled = enabled)
+        Modifier.mouseDragGestureDetector(
+            observer = manager.mouseSelectionObserver,
+            enabled = enabled
+        )
     }
 
     val drawModifier = Modifier.drawBehind {
@@ -421,6 +435,20 @@ internal fun CoreTextField(
         onDispose { manager.hideSelectionToolbar() }
     }
 
+    DisposableEffect(imeOptions) {
+        if (textInputService != null && state.hasFocus) {
+            state.inputSession = TextFieldDelegate.restartInput(
+                textInputService = textInputService,
+                value = value,
+                editProcessor = state.processor,
+                imeOptions = imeOptions,
+                onValueChange = onValueChangeWrapper,
+                onImeActionPerformed = onImeActionPerformedWrapper
+            )
+        }
+        onDispose { /* do nothing */ }
+    }
+
     val textKeyInputModifier =
         Modifier.textFieldKeyInput(
             state = state,
@@ -428,7 +456,8 @@ internal fun CoreTextField(
             value = value,
             editable = !readOnly,
             singleLine = maxLines == 1,
-            offsetMapping = offsetMapping
+            offsetMapping = offsetMapping,
+            undoManager = undoManager
         )
 
     // Modifiers that should be applied to the outer text field container. Usually those include
@@ -457,31 +486,46 @@ internal fun CoreTextField(
                 )
                 .then(cursorModifier)
                 .then(drawModifier)
-                .then(onPositionedModifier)
                 .textFieldMinSize(textStyle)
+                .then(onPositionedModifier)
 
             SimpleLayout(coreTextFieldModifier) {
-                Layout({ }) { _, constraints ->
-                    TextFieldDelegate.layout(
-                        state.textDelegate,
-                        constraints,
-                        layoutDirection,
-                        state.layoutResult?.value
-                    ).let { (width, height, result) ->
-                        if (state.layoutResult?.value != result) {
-                            state.layoutResult = TextLayoutResultProxy(result)
-                            onTextLayout(result)
-                        }
-                        layout(
-                            width,
-                            height,
-                            mapOf(
-                                FirstBaseline to result.firstBaseline.roundToInt(),
-                                LastBaseline to result.lastBaseline.roundToInt()
+                Layout(
+                    content = { },
+                    measurePolicy = object : MeasurePolicy {
+                        override fun MeasureScope.measure(
+                            measurables: List<Measurable>,
+                            constraints: Constraints
+                        ): MeasureResult {
+                            val (width, height, result) = TextFieldDelegate.layout(
+                                state.textDelegate,
+                                constraints,
+                                layoutDirection,
+                                state.layoutResult?.value
                             )
-                        ) {}
+                            if (state.layoutResult?.value != result) {
+                                state.layoutResult = TextLayoutResultProxy(result)
+                                onTextLayout(result)
+                            }
+                            return layout(
+                                width = width,
+                                height = height,
+                                alignmentLines = mapOf(
+                                    FirstBaseline to result.firstBaseline.roundToInt(),
+                                    LastBaseline to result.lastBaseline.roundToInt()
+                                )
+                            ) {}
+                        }
+
+                        override fun IntrinsicMeasureScope.maxIntrinsicWidth(
+                            measurables: List<IntrinsicMeasurable>,
+                            height: Int
+                        ): Int {
+                            state.textDelegate.layoutIntrinsics(layoutDirection)
+                            return state.textDelegate.maxIntrinsicWidth
+                        }
                     }
-                }
+                )
 
                 SelectionToolbarAndHandles(
                     manager = manager,

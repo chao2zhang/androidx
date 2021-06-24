@@ -18,7 +18,7 @@ package androidx.compose.ui.inspection.inspector
 
 import android.util.Log
 import android.view.View
-import androidx.compose.runtime.ComposeCompilerApi
+import androidx.annotation.RequiresApi
 import androidx.compose.runtime.internal.ComposableLambda
 import androidx.compose.ui.AbsoluteAlignment
 import androidx.compose.ui.Modifier
@@ -65,6 +65,7 @@ private val reflectionScope: ReflectionScope = ReflectionScope()
  *
  * Each parameter value is converted to a user readable value.
  */
+@RequiresApi(29)
 internal class ParameterFactory(private val inlineClassConverter: InlineClassConverter) {
     /**
      * A map from known values to a user readable string representation.
@@ -124,6 +125,7 @@ internal class ParameterFactory(private val inlineClassConverter: InlineClassCon
         nodeId: Long,
         name: String,
         value: Any?,
+        kind: ParameterKind,
         parameterIndex: Int,
         maxRecursions: Int,
         maxInitialIterableSize: Int
@@ -136,6 +138,7 @@ internal class ParameterFactory(private val inlineClassConverter: InlineClassCon
                     nodeId,
                     name,
                     value,
+                    kind,
                     parameterIndex,
                     maxRecursions,
                     maxInitialIterableSize
@@ -189,9 +192,9 @@ internal class ParameterFactory(private val inlineClassConverter: InlineClassCon
         }
     }
 
-    fun clearCacheFor(rootId: Long) {
+    fun clearReferenceCache() {
         val creator = creatorCache ?: return
-        creator.clearCacheFor(rootId)
+        creator.clearReferenceCache()
     }
 
     private fun loadConstantsFrom(javaClass: Class<*>) {
@@ -317,6 +320,7 @@ internal class ParameterFactory(private val inlineClassConverter: InlineClassCon
     private inner class ParameterCreator {
         private var rootId = 0L
         private var nodeId = 0L
+        private var kind: ParameterKind = ParameterKind.Normal
         private var parameterIndex = 0
         private var maxRecursions = 0
         private var maxInitialIterableSize = 0
@@ -332,12 +336,13 @@ internal class ParameterFactory(private val inlineClassConverter: InlineClassCon
             nodeId: Long,
             name: String,
             value: Any?,
+            kind: ParameterKind,
             parameterIndex: Int,
             maxRecursions: Int,
             maxInitialIterableSize: Int
         ): NodeParameter =
             try {
-                setup(rootId, nodeId, parameterIndex, maxRecursions, maxInitialIterableSize)
+                setup(rootId, nodeId, kind, parameterIndex, maxRecursions, maxInitialIterableSize)
                 create(name, value, null) ?: createEmptyParameter(name)
             } finally {
                 setup()
@@ -354,7 +359,10 @@ internal class ParameterFactory(private val inlineClassConverter: InlineClassCon
             maxRecursions: Int,
             maxInitialIterableSize: Int
         ): NodeParameter? {
-            setup(rootId, nodeId, reference.parameterIndex, maxRecursions, maxInitialIterableSize)
+            setup(
+                rootId, nodeId, reference.kind, reference.parameterIndex,
+                maxRecursions, maxInitialIterableSize
+            )
             var parent: Pair<String, Any?>? = null
             var new = Pair(name, value)
             for (i in reference.indices) {
@@ -376,19 +384,21 @@ internal class ParameterFactory(private val inlineClassConverter: InlineClassCon
             return parameter
         }
 
-        fun clearCacheFor(rootId: Long) {
-            rootValueIndexCache.remove(rootId)
+        fun clearReferenceCache() {
+            rootValueIndexCache.clear()
         }
 
         private fun setup(
             newRootId: Long = 0,
             newNodeId: Long = 0,
+            newKind: ParameterKind = ParameterKind.Normal,
             newParameterIndex: Int = 0,
             maxRecursions: Int = 0,
             maxInitialIterableSize: Int = 0
         ) {
             rootId = newRootId
             nodeId = newNodeId
+            kind = newKind
             parameterIndex = newParameterIndex
             this.maxRecursions = maxRecursions
             this.maxInitialIterableSize = maxInitialIterableSize
@@ -419,7 +429,6 @@ internal class ParameterFactory(private val inlineClassConverter: InlineClassCon
                 return null
             }
             createFromConstant(name, value)?.let { return it }
-            @OptIn(ComposeCompilerApi::class)
             return when (value) {
                 is AnnotatedString -> NodeParameter(name, ParameterType.String, value.text)
                 is BaselineShift -> createFromBaselineShift(name, value)
@@ -587,7 +596,7 @@ internal class ParameterFactory(private val inlineClassConverter: InlineClassCon
         }
 
         private fun valueIndexToReference(): NodeParameterReference =
-            NodeParameterReference(nodeId, parameterIndex, valueIndex)
+            NodeParameterReference(nodeId, kind, parameterIndex, valueIndex)
 
         private fun createEmptyParameter(name: String): NodeParameter =
             NodeParameter(name, ParameterType.String, "")
@@ -629,7 +638,6 @@ internal class ParameterFactory(private val inlineClassConverter: InlineClassCon
             return NodeParameter(name, ParameterType.String, converted)
         }
 
-        @OptIn(ComposeCompilerApi::class)
         private fun createFromCLambda(name: String, value: ComposableLambda): NodeParameter? = try {
             val lambda = value.javaClass.getDeclaredField("_block")
                 .apply { isAccessible = true }
@@ -906,8 +914,7 @@ internal class ParameterFactory(private val inlineClassConverter: InlineClassCon
             when (value.type) {
                 TextUnitType.Sp -> NodeParameter(name, ParameterType.DimensionSp, value.value)
                 TextUnitType.Em -> NodeParameter(name, ParameterType.DimensionEm, value.value)
-                TextUnitType.Unspecified ->
-                    NodeParameter(name, ParameterType.String, "Unspecified")
+                else -> NodeParameter(name, ParameterType.String, "Unspecified")
             }
 
         private fun createFromImageVector(name: String, value: ImageVector): NodeParameter =
@@ -920,7 +927,7 @@ internal class ParameterFactory(private val inlineClassConverter: InlineClassCon
          */
         private fun findBestResourceFont(value: FontListFontFamily): ResourceFont? =
             value.fonts.asSequence().filterIsInstance<ResourceFont>().minByOrNull {
-                abs(it.weight.weight - FontWeight.Normal.weight) + it.style.ordinal
+                abs(it.weight.weight - FontWeight.Normal.weight) + it.style.value
             }
     }
 }

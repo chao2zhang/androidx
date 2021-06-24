@@ -23,10 +23,10 @@ import android.view.ViewGroup;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.StyleRes;
-import androidx.wear.tiles.builders.LayoutElementBuilders;
-import androidx.wear.tiles.builders.ResourceBuilders;
-import androidx.wear.tiles.builders.StateBuilders;
-import androidx.wear.tiles.renderer.internal.StandardResourceAccessors;
+import androidx.wear.tiles.LayoutElementBuilders;
+import androidx.wear.tiles.ResourceBuilders;
+import androidx.wear.tiles.StateBuilders;
+import androidx.wear.tiles.renderer.internal.StandardResourceResolvers;
 import androidx.wear.tiles.renderer.internal.TileRendererInternal;
 
 import java.util.concurrent.Executor;
@@ -93,13 +93,15 @@ public final class TileRenderer {
             @NonNull ResourceBuilders.Resources resources,
             @NonNull Executor loadActionExecutor,
             @NonNull LoadActionListener loadActionListener) {
-        this.mRenderer = new TileRendererInternal(
-                appContext,
-                layout.toProto(),
-                StandardResourceAccessors.forLocalApp(appContext, resources).build(),
-                tilesTheme,
-                loadActionExecutor,
-                (s) -> loadActionListener.onClick(StateBuilders.State.fromProto(s)));
+        this.mRenderer =
+                new TileRendererInternal(
+                        appContext,
+                        layout.toProto(),
+                        StandardResourceResolvers.forLocalApp(resources.toProto(), appContext)
+                                .build(),
+                        tilesTheme,
+                        loadActionExecutor,
+                        (s) -> loadActionListener.onClick(StateBuilders.State.fromProto(s)));
     }
 
     /**

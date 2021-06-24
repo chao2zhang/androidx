@@ -65,6 +65,7 @@ import android.util.TypedValue;
 import android.view.KeyEvent;
 import android.view.ViewConfiguration;
 
+import androidx.annotation.DoNotInline;
 import androidx.annotation.GuardedBy;
 import androidx.annotation.IntDef;
 import androidx.annotation.NonNull;
@@ -72,6 +73,7 @@ import androidx.annotation.Nullable;
 import androidx.annotation.RequiresApi;
 import androidx.annotation.RestrictTo;
 import androidx.core.app.BundleCompat;
+import androidx.core.os.BuildCompat;
 import androidx.media.MediaSessionManager;
 import androidx.media.MediaSessionManager.RemoteUserInfo;
 import androidx.media.VolumeProviderCompat;
@@ -123,6 +125,14 @@ import java.util.Set;
  */
 public class MediaSessionCompat {
     static final String TAG = "MediaSessionCompat";
+
+    // TODO(b/182513352): Use PendingIntent.FLAG_MUTABLE instead from S.
+    /**
+     * @hide
+     */
+    @RestrictTo(LIBRARY)
+    public static final int PENDING_INTENT_FLAG_MUTABLE =
+            BuildCompat.isAtLeastS() ? 0x02000000 : 0;
 
     private final MediaSessionImpl mImpl;
     private final MediaControllerCompat mController;
@@ -533,6 +543,7 @@ public class MediaSessionCompat {
      * @hide
      */
     @RestrictTo(LIBRARY_GROUP_PREFIX) // accessed by media2-session
+    @SuppressLint("WrongConstant") // PENDING_INTENT_FLAG_MUTABLE
     public MediaSessionCompat(@NonNull Context context, @NonNull String tag,
             @Nullable ComponentName mbrComponent, @Nullable PendingIntent mbrIntent,
             @Nullable Bundle sessionInfo, @Nullable VersionedParcelable session2Token) {
@@ -557,17 +568,18 @@ public class MediaSessionCompat {
             mediaButtonIntent.setComponent(mbrComponent);
             mbrIntent = PendingIntent.getBroadcast(context,
                     0/* requestCode, ignored */, mediaButtonIntent,
-                    PendingIntent.FLAG_IMMUTABLE);
+                    PENDING_INTENT_FLAG_MUTABLE);
         }
 
         if (android.os.Build.VERSION.SDK_INT >= 21) {
-            MediaSession sessionFwk = createFwkMediaSession(context, tag, sessionInfo);
             if (android.os.Build.VERSION.SDK_INT >= 29) {
-                mImpl = new MediaSessionImplApi29(sessionFwk, session2Token, sessionInfo);
+                mImpl = new MediaSessionImplApi29(context, tag, session2Token, sessionInfo);
             } else if (android.os.Build.VERSION.SDK_INT >= 28) {
-                mImpl = new MediaSessionImplApi28(sessionFwk, session2Token, sessionInfo);
+                mImpl = new MediaSessionImplApi28(context, tag, session2Token, sessionInfo);
+            } else if (android.os.Build.VERSION.SDK_INT >= 22) {
+                mImpl = new MediaSessionImplApi22(context, tag, session2Token, sessionInfo);
             } else {
-                mImpl = new MediaSessionImplApi21(sessionFwk, session2Token, sessionInfo);
+                mImpl = new MediaSessionImplApi21(context, tag, session2Token, sessionInfo);
             }
             // Set default callback to respond to controllers' extra binder requests.
             Handler handler = new Handler(Looper.myLooper() != null
@@ -595,16 +607,6 @@ public class MediaSessionCompat {
     private MediaSessionCompat(Context context, MediaSessionImpl impl) {
         mImpl = impl;
         mController = new MediaControllerCompat(context, this);
-    }
-
-    @RequiresApi(21)
-    private MediaSession createFwkMediaSession(Context context, String tag,
-            Bundle sessionInfo) {
-        if (android.os.Build.VERSION.SDK_INT >= 29) {
-            return new MediaSession(context, tag, sessionInfo);
-        } else {
-            return new MediaSession(context, tag);
-        }
     }
 
     /**
@@ -2105,6 +2107,7 @@ public class MediaSessionCompat {
             if (tokenBundle == null) {
                 return null;
             }
+            tokenBundle.setClassLoader(Token.class.getClassLoader());
             IMediaSession extraSession = IMediaSession.Stub.asInterface(
                     BundleCompat.getBinder(tokenBundle, KEY_EXTRA_BINDER));
             VersionedParcelable session2Token = ParcelUtils.getVersionedParcelable(tokenBundle,
@@ -2219,7 +2222,7 @@ public class MediaSessionCompat {
             if (mItemFwk != null || android.os.Build.VERSION.SDK_INT < 21) {
                 return mItemFwk;
             }
-            mItemFwk = new MediaSession.QueueItem(
+            mItemFwk = Api21Impl.createQueueItem(
                     (MediaDescription) mDescription.getMediaDescription(),
                     mId);
             return mItemFwk;
@@ -2240,10 +2243,10 @@ public class MediaSessionCompat {
                 return null;
             }
             MediaSession.QueueItem queueItemObj = (MediaSession.QueueItem) queueItem;
-            Object descriptionObj = queueItemObj.getDescription();
+            Object descriptionObj = Api21Impl.getDescription(queueItemObj);
             MediaDescriptionCompat description = MediaDescriptionCompat.fromMediaDescription(
                     descriptionObj);
-            long id = queueItemObj.getQueueId();
+            long id = Api21Impl.getQueueId(queueItemObj);
             return new QueueItem(queueItemObj, description, id);
         }
 
@@ -2287,6 +2290,26 @@ public class MediaSessionCompat {
             return "MediaSession.QueueItem {" +
                     "Description=" + mDescription +
                     ", Id=" + mId + " }";
+        }
+
+        @RequiresApi(21)
+        private static class Api21Impl {
+            private Api21Impl() {}
+
+            @DoNotInline
+            static MediaSession.QueueItem createQueueItem(MediaDescription description, long id) {
+                return new MediaSession.QueueItem(description, id);
+            }
+
+            @DoNotInline
+            static MediaDescription getDescription(MediaSession.QueueItem queueItem) {
+                return queueItem.getDescription();
+            }
+
+            @DoNotInline
+            static long getQueueId(MediaSession.QueueItem queueItem) {
+                return queueItem.getQueueId();
+            }
         }
     }
 
@@ -3793,9 +3816,9 @@ public class MediaSessionCompat {
         @GuardedBy("mLock")
         RemoteUserInfo mRemoteUserInfo;
 
-        MediaSessionImplApi21(MediaSession sessionFwk, VersionedParcelable session2Token,
+        MediaSessionImplApi21(Context context, String tag, VersionedParcelable session2Token,
                 Bundle sessionInfo) {
-            mSessionFwk = sessionFwk;
+            mSessionFwk = createFwkMediaSession(context, tag, sessionInfo);
             mToken = new Token(mSessionFwk.getSessionToken(), new ExtraSession(), session2Token);
             mSessionInfo = sessionInfo;
             // For backward compatibility, these flags are always set.
@@ -3812,6 +3835,10 @@ public class MediaSessionCompat {
             mSessionInfo = null;
             // For backward compatibility, these flags are always set.
             setFlags(FLAG_HANDLES_MEDIA_BUTTONS | FLAG_HANDLES_TRANSPORT_CONTROLS);
+        }
+
+        public MediaSession createFwkMediaSession(Context context, String tag, Bundle sessionInfo) {
+            return new MediaSession(context, tag);
         }
 
         @Override
@@ -3959,11 +3986,7 @@ public class MediaSessionCompat {
 
         @Override
         public void setRatingType(@RatingCompat.Style int type) {
-            if (android.os.Build.VERSION.SDK_INT < 22) {
-                mRatingType = type;
-            } else {
-                mSessionFwk.setRatingType(type);
-            }
+            mRatingType = type;
         }
 
         @Override
@@ -4375,11 +4398,28 @@ public class MediaSessionCompat {
         }
     }
 
-    @RequiresApi(28)
-    static class MediaSessionImplApi28 extends MediaSessionImplApi21 {
-        MediaSessionImplApi28(MediaSession sessionFwk, VersionedParcelable session2Token,
+    @RequiresApi(22)
+    static class MediaSessionImplApi22 extends MediaSessionImplApi21 {
+        MediaSessionImplApi22(Context context, String tag, VersionedParcelable session2Token,
                 Bundle sessionInfo) {
-            super(sessionFwk, session2Token, sessionInfo);
+            super(context, tag, session2Token, sessionInfo);
+        }
+
+        MediaSessionImplApi22(Object mediaSession) {
+            super(mediaSession);
+        }
+
+        @Override
+        public void setRatingType(@RatingCompat.Style int type) {
+            mSessionFwk.setRatingType(type);
+        }
+    }
+
+    @RequiresApi(28)
+    static class MediaSessionImplApi28 extends MediaSessionImplApi22 {
+        MediaSessionImplApi28(Context context, String tag, VersionedParcelable session2Token,
+                Bundle sessionInfo) {
+            super(context, tag, session2Token, sessionInfo);
         }
 
         MediaSessionImplApi28(Object mediaSession) {
@@ -4402,14 +4442,19 @@ public class MediaSessionCompat {
 
     @RequiresApi(29)
     static class MediaSessionImplApi29 extends MediaSessionImplApi28 {
-        MediaSessionImplApi29(MediaSession sessionFwk, VersionedParcelable session2Token,
+        MediaSessionImplApi29(Context context, String tag, VersionedParcelable session2Token,
                 Bundle sessionInfo) {
-            super(sessionFwk, session2Token, sessionInfo);
+            super(context, tag, session2Token, sessionInfo);
         }
 
         MediaSessionImplApi29(Object mediaSession) {
             super(mediaSession);
             mSessionInfo = ((MediaSession) mediaSession).getController().getSessionInfo();
+        }
+
+        @Override
+        public MediaSession createFwkMediaSession(Context context, String tag, Bundle sessionInfo) {
+            return new MediaSession(context, tag, sessionInfo);
         }
     }
 }

@@ -1,5 +1,115 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<issues format="5" by="lint 4.2.0-beta02" client="gradle" variant="debug" version="4.2.0-beta02">
+<issues format="6" by="lint 7.1.0-dev" type="baseline" client="gradle" name="AGP (7.1.0-dev)" variant="all" version="7.1.0-dev">
+
+    <issue
+        id="NewApi"
+        message="Call requires API level 27 (current min is 16): `android.app.Activity#setTurnScreenOn`"
+        errorLine1="                mActivity.setTurnScreenOn(true);"
+        errorLine2="                          ~~~~~~~~~~~~~~~">
+        <location
+            file="src/androidTest/java/androidx/media2/player/MediaPlayer2DrmTestBase.java"
+            line="111"
+            column="27"/>
+    </issue>
+
+    <issue
+        id="NewApi"
+        message="Call requires API level 27 (current min is 16): `android.app.Activity#setShowWhenLocked`"
+        errorLine1="                mActivity.setShowWhenLocked(true);"
+        errorLine2="                          ~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/androidTest/java/androidx/media2/player/MediaPlayer2DrmTestBase.java"
+            line="112"
+            column="27"/>
+    </issue>
+
+    <issue
+        id="NewApi"
+        message="Call requires API level 26 (current min is 16): `android.app.KeyguardManager#requestDismissKeyguard`"
+        errorLine1="                mKeyguardManager.requestDismissKeyguard(mActivity, null);"
+        errorLine2="                                 ~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/androidTest/java/androidx/media2/player/MediaPlayer2DrmTestBase.java"
+            line="113"
+            column="34"/>
+    </issue>
+
+    <issue
+        id="NewApi"
+        message="Call requires API level 18 (current min is 16): `android.media.MediaDrm.KeyRequest#getData`"
+        errorLine1="        if (0 == getKeyIds(keyRequest.getData(), keyIds)) {"
+        errorLine2="                                      ~~~~~~~">
+        <location
+            file="src/androidTest/java/androidx/media2/player/MediaPlayer2DrmTestBase.java"
+            line="874"
+            column="39"/>
+    </issue>
+
+    <issue
+        id="NewApi"
+        message="Call requires API level 27 (current min is 16): `android.app.Activity#setTurnScreenOn`"
+        errorLine1="                mActivity.setTurnScreenOn(true);"
+        errorLine2="                          ~~~~~~~~~~~~~~~">
+        <location
+            file="src/androidTest/java/androidx/media2/player/MediaPlayerDrmTest.java"
+            line="129"
+            column="27"/>
+    </issue>
+
+    <issue
+        id="NewApi"
+        message="Call requires API level 27 (current min is 16): `android.app.Activity#setShowWhenLocked`"
+        errorLine1="                mActivity.setShowWhenLocked(true);"
+        errorLine2="                          ~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/androidTest/java/androidx/media2/player/MediaPlayerDrmTest.java"
+            line="130"
+            column="27"/>
+    </issue>
+
+    <issue
+        id="NewApi"
+        message="Call requires API level 26 (current min is 16): `android.app.KeyguardManager#requestDismissKeyguard`"
+        errorLine1="                mKeyguardManager.requestDismissKeyguard(mActivity, null);"
+        errorLine2="                                 ~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/androidTest/java/androidx/media2/player/MediaPlayerDrmTest.java"
+            line="131"
+            column="34"/>
+    </issue>
+
+    <issue
+        id="NewApi"
+        message="Call requires API level 18 (current min is 16): `android.media.MediaDrm.KeyRequest#getData`"
+        errorLine1="        if (0 == getKeyIds(keyRequest.getData(), keyIds)) {"
+        errorLine2="                                      ~~~~~~~">
+        <location
+            file="src/androidTest/java/androidx/media2/player/MediaPlayerDrmTest.java"
+            line="955"
+            column="39"/>
+    </issue>
+
+    <issue
+        id="WrongConstant"
+        message="Must be one of: BaseResult.RESULT_SUCCESS, DrmResult.RESULT_ERROR_PROVISIONING_NETWORK_ERROR, DrmResult.RESULT_ERROR_PROVISIONING_SERVER_ERROR, DrmResult.RESULT_ERROR_PREPARATION_ERROR, DrmResult.RESULT_ERROR_UNSUPPORTED_SCHEME, DrmResult.RESULT_ERROR_RESOURCE_BUSY"
+        errorLine1="            return super.getResultCode();"
+        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/androidx/media2/player/MediaPlayer.java"
+            line="3859"
+            column="20"/>
+    </issue>
+
+    <issue
+        id="WrongConstant"
+        message="Must be one of: PlaybackParams.AUDIO_FALLBACK_MODE_DEFAULT, PlaybackParams.AUDIO_FALLBACK_MODE_MUTE, PlaybackParams.AUDIO_FALLBACK_MODE_FAIL"
+        errorLine1="                return mPlaybackParams.getAudioFallbackMode();"
+        errorLine2="                       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/androidx/media2/player/PlaybackParams.java"
+            line="115"
+            column="24"/>
+    </issue>
 
     <issue
         id="BanSynchronizedMethods"
@@ -47,7 +157,7 @@
 
     <issue
         id="BanUncheckedReflection"
-        message="Calling Method.invoke without an SDK check"
+        message="Calling `Method.invoke` without an SDK check"
         errorLine1="            return (FileDescriptor) method.invoke(object, fileDescriptor);"
         errorLine2="                                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
@@ -58,7 +168,7 @@
 
     <issue
         id="BanUncheckedReflection"
-        message="Calling Method.invoke without an SDK check"
+        message="Calling `Method.invoke` without an SDK check"
         errorLine1="            method.invoke(object, fileDescriptor, position, /* whence= */ SEEK_SET);"
         errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
@@ -69,7 +179,7 @@
 
     <issue
         id="BanUncheckedReflection"
-        message="Calling Method.invoke without an SDK check"
+        message="Calling `Method.invoke` without an SDK check"
         errorLine1="            return (FileDescriptor) method.invoke(object, fileDescriptor);"
         errorLine2="                                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
@@ -79,8 +189,8 @@
     </issue>
 
     <issue
-        id="UnsafeNewApiCall"
-        message="This call is to a method from API 21, the call containing class androidx.media2.player.ExoPlayerWrapper is not annotated with @RequiresApi(x) where x is at least 21. Either annotate the containing class with at least @RequiresApi(21) or move the call to a static method in a wrapper class annotated with at least @RequiresApi(21)."
+        id="ClassVerificationFailure"
+        message="This call references a method added in API level 21; however, the containing class androidx.media2.player.ExoPlayerWrapper is reachable from earlier API levels and will fail run-time class verification."
         errorLine1="        PersistableBundle bundle = new PersistableBundle();"
         errorLine2="                                   ~~~~~~~~~~~~~~~~~~~~~">
         <location
@@ -90,8 +200,8 @@
     </issue>
 
     <issue
-        id="UnsafeNewApiCall"
-        message="This call is to a method from API 21, the call containing class androidx.media2.player.ExoPlayerWrapper is not annotated with @RequiresApi(x) where x is at least 21. Either annotate the containing class with at least @RequiresApi(21) or move the call to a static method in a wrapper class annotated with at least @RequiresApi(21)."
+        id="ClassVerificationFailure"
+        message="This call references a method added in API level 21; however, the containing class androidx.media2.player.ExoPlayerWrapper is reachable from earlier API levels and will fail run-time class verification."
         errorLine1="            bundle.putString(MediaPlayer2.MetricsConstants.MIME_TYPE_VIDEO, primaryVideoMimeType);"
         errorLine2="                   ~~~~~~~~~">
         <location
@@ -101,8 +211,8 @@
     </issue>
 
     <issue
-        id="UnsafeNewApiCall"
-        message="This call is to a method from API 21, the call containing class androidx.media2.player.ExoPlayerWrapper is not annotated with @RequiresApi(x) where x is at least 21. Either annotate the containing class with at least @RequiresApi(21) or move the call to a static method in a wrapper class annotated with at least @RequiresApi(21)."
+        id="ClassVerificationFailure"
+        message="This call references a method added in API level 21; however, the containing class androidx.media2.player.ExoPlayerWrapper is reachable from earlier API levels and will fail run-time class verification."
         errorLine1="            bundle.putString(MediaPlayer2.MetricsConstants.MIME_TYPE_AUDIO, primaryAudioMimeType);"
         errorLine2="                   ~~~~~~~~~">
         <location
@@ -112,8 +222,8 @@
     </issue>
 
     <issue
-        id="UnsafeNewApiCall"
-        message="This call is to a method from API 21, the call containing class androidx.media2.player.ExoPlayerWrapper is not annotated with @RequiresApi(x) where x is at least 21. Either annotate the containing class with at least @RequiresApi(21) or move the call to a static method in a wrapper class annotated with at least @RequiresApi(21)."
+        id="ClassVerificationFailure"
+        message="This call references a method added in API level 21; however, the containing class androidx.media2.player.ExoPlayerWrapper is reachable from earlier API levels and will fail run-time class verification."
         errorLine1="        bundle.putLong(MediaPlayer2.MetricsConstants.DURATION,"
         errorLine2="               ~~~~~~~">
         <location
@@ -123,8 +233,8 @@
     </issue>
 
     <issue
-        id="UnsafeNewApiCall"
-        message="This call is to a method from API 21, the call containing class androidx.media2.player.ExoPlayerWrapper is not annotated with @RequiresApi(x) where x is at least 21. Either annotate the containing class with at least @RequiresApi(21) or move the call to a static method in a wrapper class annotated with at least @RequiresApi(21)."
+        id="ClassVerificationFailure"
+        message="This call references a method added in API level 21; however, the containing class androidx.media2.player.ExoPlayerWrapper is reachable from earlier API levels and will fail run-time class verification."
         errorLine1="        bundle.putLong(MediaPlayer2.MetricsConstants.PLAYING, playingTimeMs);"
         errorLine2="               ~~~~~~~">
         <location
@@ -134,8 +244,8 @@
     </issue>
 
     <issue
-        id="UnsafeNewApiCall"
-        message="This call is to a method from API 21, the call containing class androidx.media2.player.FileDescriptorUtil is not annotated with @RequiresApi(x) where x is at least 21. Either annotate the containing class with at least @RequiresApi(21) or move the call to a static method in a wrapper class annotated with at least @RequiresApi(21)."
+        id="ClassVerificationFailure"
+        message="This call references a method added in API level 21; however, the containing class androidx.media2.player.FileDescriptorUtil is reachable from earlier API levels and will fail run-time class verification."
         errorLine1="            return Os.dup(fileDescriptor);"
         errorLine2="                      ~~~">
         <location
@@ -145,8 +255,8 @@
     </issue>
 
     <issue
-        id="UnsafeNewApiCall"
-        message="This call is to a method from API 21, the call containing class androidx.media2.player.FileDescriptorUtil is not annotated with @RequiresApi(x) where x is at least 21. Either annotate the containing class with at least @RequiresApi(21) or move the call to a static method in a wrapper class annotated with at least @RequiresApi(21)."
+        id="ClassVerificationFailure"
+        message="This call references a method added in API level 21; however, the containing class androidx.media2.player.FileDescriptorUtil is reachable from earlier API levels and will fail run-time class verification."
         errorLine1="            Os.lseek(fileDescriptor, position, /* whence= */ OsConstants.SEEK_SET);"
         errorLine2="               ~~~~~">
         <location
@@ -156,8 +266,8 @@
     </issue>
 
     <issue
-        id="UnsafeNewApiCall"
-        message="This call is to a method from API 21, the call containing class androidx.media2.player.FileDescriptorUtil is not annotated with @RequiresApi(x) where x is at least 21. Either annotate the containing class with at least @RequiresApi(21) or move the call to a static method in a wrapper class annotated with at least @RequiresApi(21)."
+        id="ClassVerificationFailure"
+        message="This call references a method added in API level 21; however, the containing class androidx.media2.player.FileDescriptorUtil is reachable from earlier API levels and will fail run-time class verification."
         errorLine1="            Os.close(fileDescriptor);"
         errorLine2="               ~~~~~">
         <location
@@ -167,8 +277,8 @@
     </issue>
 
     <issue
-        id="UnsafeNewApiCall"
-        message="This call is to a method from API 23, the call containing class androidx.media2.player.MediaTimestamp is not annotated with @RequiresApi(x) where x is at least 23. Either annotate the containing class with at least @RequiresApi(23) or move the call to a static method in a wrapper class annotated with at least @RequiresApi(23)."
+        id="ClassVerificationFailure"
+        message="This call references a method added in API level 23; however, the containing class androidx.media2.player.MediaTimestamp is reachable from earlier API levels and will fail run-time class verification."
         errorLine1="        mMediaTimeUs = timestamp.getAnchorMediaTimeUs();"
         errorLine2="                                 ~~~~~~~~~~~~~~~~~~~~">
         <location
@@ -178,8 +288,8 @@
     </issue>
 
     <issue
-        id="UnsafeNewApiCall"
-        message="This call is to a method from API 23, the call containing class androidx.media2.player.MediaTimestamp is not annotated with @RequiresApi(x) where x is at least 23. Either annotate the containing class with at least @RequiresApi(23) or move the call to a static method in a wrapper class annotated with at least @RequiresApi(23)."
+        id="ClassVerificationFailure"
+        message="This call references a method added in API level 23; however, the containing class androidx.media2.player.MediaTimestamp is reachable from earlier API levels and will fail run-time class verification."
         errorLine1="        mNanoTime = timestamp.getAnchorSytemNanoTime();"
         errorLine2="                              ~~~~~~~~~~~~~~~~~~~~~~">
         <location
@@ -189,8 +299,8 @@
     </issue>
 
     <issue
-        id="UnsafeNewApiCall"
-        message="This call is to a method from API 23, the call containing class androidx.media2.player.MediaTimestamp is not annotated with @RequiresApi(x) where x is at least 23. Either annotate the containing class with at least @RequiresApi(23) or move the call to a static method in a wrapper class annotated with at least @RequiresApi(23)."
+        id="ClassVerificationFailure"
+        message="This call references a method added in API level 23; however, the containing class androidx.media2.player.MediaTimestamp is reachable from earlier API levels and will fail run-time class verification."
         errorLine1="        mClockRate = timestamp.getMediaClockRate();"
         errorLine2="                               ~~~~~~~~~~~~~~~~~">
         <location
@@ -200,8 +310,8 @@
     </issue>
 
     <issue
-        id="UnsafeNewApiCall"
-        message="This call is to a method from API 23, the call containing class androidx.media2.player.PlaybackParams is not annotated with @RequiresApi(x) where x is at least 23. Either annotate the containing class with at least @RequiresApi(23) or move the call to a static method in a wrapper class annotated with at least @RequiresApi(23)."
+        id="ClassVerificationFailure"
+        message="This call references a method added in API level 23; however, the containing class androidx.media2.player.PlaybackParams is reachable from earlier API levels and will fail run-time class verification."
         errorLine1="                return mPlaybackParams.getAudioFallbackMode();"
         errorLine2="                                       ~~~~~~~~~~~~~~~~~~~~">
         <location
@@ -211,8 +321,8 @@
     </issue>
 
     <issue
-        id="UnsafeNewApiCall"
-        message="This call is to a method from API 23, the call containing class androidx.media2.player.PlaybackParams is not annotated with @RequiresApi(x) where x is at least 23. Either annotate the containing class with at least @RequiresApi(23) or move the call to a static method in a wrapper class annotated with at least @RequiresApi(23)."
+        id="ClassVerificationFailure"
+        message="This call references a method added in API level 23; however, the containing class androidx.media2.player.PlaybackParams is reachable from earlier API levels and will fail run-time class verification."
         errorLine1="                return mPlaybackParams.getPitch();"
         errorLine2="                                       ~~~~~~~~">
         <location
@@ -222,8 +332,8 @@
     </issue>
 
     <issue
-        id="UnsafeNewApiCall"
-        message="This call is to a method from API 23, the call containing class androidx.media2.player.PlaybackParams is not annotated with @RequiresApi(x) where x is at least 23. Either annotate the containing class with at least @RequiresApi(23) or move the call to a static method in a wrapper class annotated with at least @RequiresApi(23)."
+        id="ClassVerificationFailure"
+        message="This call references a method added in API level 23; however, the containing class androidx.media2.player.PlaybackParams is reachable from earlier API levels and will fail run-time class verification."
         errorLine1="                return mPlaybackParams.getSpeed();"
         errorLine2="                                       ~~~~~~~~">
         <location
@@ -233,8 +343,8 @@
     </issue>
 
     <issue
-        id="UnsafeNewApiCall"
-        message="This call is to a method from API 23, the call containing class androidx.media2.player.PlaybackParams.Builder is not annotated with @RequiresApi(x) where x is at least 23. Either annotate the containing class with at least @RequiresApi(23) or move the call to a static method in a wrapper class annotated with at least @RequiresApi(23)."
+        id="ClassVerificationFailure"
+        message="This call references a method added in API level 23; however, the containing class androidx.media2.player.PlaybackParams.Builder is reachable from earlier API levels and will fail run-time class verification."
         errorLine1="                mPlaybackParams = new android.media.PlaybackParams();"
         errorLine2="                                  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
@@ -244,8 +354,8 @@
     </issue>
 
     <issue
-        id="UnsafeNewApiCall"
-        message="This call is to a method from API 23, the call containing class androidx.media2.player.PlaybackParams.Builder is not annotated with @RequiresApi(x) where x is at least 23. Either annotate the containing class with at least @RequiresApi(23) or move the call to a static method in a wrapper class annotated with at least @RequiresApi(23)."
+        id="ClassVerificationFailure"
+        message="This call references a method added in API level 23; however, the containing class androidx.media2.player.PlaybackParams.Builder is reachable from earlier API levels and will fail run-time class verification."
         errorLine1="                mPlaybackParams.setAudioFallbackMode(audioFallbackMode);"
         errorLine2="                                ~~~~~~~~~~~~~~~~~~~~">
         <location
@@ -255,8 +365,8 @@
     </issue>
 
     <issue
-        id="UnsafeNewApiCall"
-        message="This call is to a method from API 23, the call containing class androidx.media2.player.PlaybackParams.Builder is not annotated with @RequiresApi(x) where x is at least 23. Either annotate the containing class with at least @RequiresApi(23) or move the call to a static method in a wrapper class annotated with at least @RequiresApi(23)."
+        id="ClassVerificationFailure"
+        message="This call references a method added in API level 23; however, the containing class androidx.media2.player.PlaybackParams.Builder is reachable from earlier API levels and will fail run-time class verification."
         errorLine1="                mPlaybackParams.setPitch(pitch);"
         errorLine2="                                ~~~~~~~~">
         <location
@@ -266,8 +376,8 @@
     </issue>
 
     <issue
-        id="UnsafeNewApiCall"
-        message="This call is to a method from API 23, the call containing class androidx.media2.player.PlaybackParams.Builder is not annotated with @RequiresApi(x) where x is at least 23. Either annotate the containing class with at least @RequiresApi(23) or move the call to a static method in a wrapper class annotated with at least @RequiresApi(23)."
+        id="ClassVerificationFailure"
+        message="This call references a method added in API level 23; however, the containing class androidx.media2.player.PlaybackParams.Builder is reachable from earlier API levels and will fail run-time class verification."
         errorLine1="                mPlaybackParams.setSpeed(speed);"
         errorLine2="                                ~~~~~~~~">
         <location
@@ -277,8 +387,8 @@
     </issue>
 
     <issue
-        id="UnsafeNewApiCall"
-        message="This call is to a method from API 23, the call containing class androidx.media2.player.TimedMetaData is not annotated with @RequiresApi(x) where x is at least 23. Either annotate the containing class with at least @RequiresApi(23) or move the call to a static method in a wrapper class annotated with at least @RequiresApi(23)."
+        id="ClassVerificationFailure"
+        message="This call references a method added in API level 23; however, the containing class androidx.media2.player.TimedMetaData is reachable from earlier API levels and will fail run-time class verification."
         errorLine1="        mTimestampUs = timedMetaData.getTimestamp();"
         errorLine2="                                     ~~~~~~~~~~~~">
         <location
@@ -288,8 +398,8 @@
     </issue>
 
     <issue
-        id="UnsafeNewApiCall"
-        message="This call is to a method from API 23, the call containing class androidx.media2.player.TimedMetaData is not annotated with @RequiresApi(x) where x is at least 23. Either annotate the containing class with at least @RequiresApi(23) or move the call to a static method in a wrapper class annotated with at least @RequiresApi(23)."
+        id="ClassVerificationFailure"
+        message="This call references a method added in API level 23; however, the containing class androidx.media2.player.TimedMetaData is reachable from earlier API levels and will fail run-time class verification."
         errorLine1="        mMetaData = timedMetaData.getMetaData();"
         errorLine2="                                  ~~~~~~~~~~~">
         <location

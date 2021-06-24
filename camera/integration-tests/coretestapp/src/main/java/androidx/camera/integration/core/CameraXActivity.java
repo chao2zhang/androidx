@@ -39,6 +39,7 @@ import android.util.Log;
 import android.util.Range;
 import android.util.Rational;
 import android.view.Display;
+import android.view.GestureDetector;
 import android.view.MotionEvent;
 import android.view.ScaleGestureDetector;
 import android.view.View;
@@ -56,31 +57,38 @@ import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.annotation.MainThread;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
-import androidx.annotation.OptIn;
+import androidx.annotation.UiThread;
 import androidx.annotation.VisibleForTesting;
-import androidx.annotation.experimental.UseExperimental;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.camera.core.Camera;
 import androidx.camera.core.CameraControl;
 import androidx.camera.core.CameraInfo;
 import androidx.camera.core.CameraSelector;
-import androidx.camera.core.ExperimentalUseCaseGroup;
+import androidx.camera.core.DisplayOrientedMeteringPointFactory;
 import androidx.camera.core.ExposureState;
+import androidx.camera.core.FocusMeteringAction;
+import androidx.camera.core.FocusMeteringResult;
 import androidx.camera.core.ImageAnalysis;
 import androidx.camera.core.ImageCapture;
 import androidx.camera.core.ImageCaptureException;
 import androidx.camera.core.ImageProxy;
+import androidx.camera.core.MeteringPointFactory;
 import androidx.camera.core.Preview;
 import androidx.camera.core.TorchState;
 import androidx.camera.core.UseCase;
 import androidx.camera.core.UseCaseGroup;
-import androidx.camera.core.VideoCapture;
 import androidx.camera.core.ViewPort;
 import androidx.camera.core.impl.utils.executor.CameraXExecutors;
-import androidx.camera.lifecycle.ExperimentalUseCaseGroupLifecycle;
 import androidx.camera.lifecycle.ProcessCameraProvider;
+import androidx.camera.video.ActiveRecording;
+import androidx.camera.video.MediaStoreOutputOptions;
+import androidx.camera.video.Recorder;
+import androidx.camera.video.RecordingStats;
+import androidx.camera.video.VideoCapture;
+import androidx.camera.video.VideoRecordEvent;
 import androidx.core.content.ContextCompat;
 import androidx.core.math.MathUtils;
+import androidx.core.util.Consumer;
 import androidx.lifecycle.MutableLiveData;
 import androidx.lifecycle.ViewModelProvider;
 import androidx.test.espresso.IdlingResource;
@@ -100,6 +108,7 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -122,7 +131,7 @@ public class CameraXActivity extends AppCompatActivity {
             };
     // Possible values for this intent key: "backward" or "forward".
     private static final String INTENT_EXTRA_CAMERA_DIRECTION = "camera_direction";
-    private static final String INTENT_EXTRA_CAMERA_IMPLEMENTATION = "camera_implementation";
+    public static final String INTENT_EXTRA_CAMERA_IMPLEMENTATION = "camera_implementation";
     static final CameraSelector BACK_SELECTOR =
             new CameraSelector.Builder().requireLensFacing(CameraSelector.LENS_FACING_BACK).build();
     static final CameraSelector FRONT_SELECTOR =
@@ -133,7 +142,7 @@ public class CameraXActivity extends AppCompatActivity {
     private final AtomicLong mPreviewFrameCount = new AtomicLong(0);
     private final MutableLiveData<String> mImageAnalysisResult = new MutableLiveData<>();
     private static final String BACKWARD = "BACKWARD";
-    private VideoFileSaver mVideoFileSaver;
+    private ActiveRecording mActiveRecording;
     /** The camera to use */
     CameraSelector mCurrentCameraSelector = BACK_SELECTOR;
     ProcessCameraProvider mCameraProvider;
@@ -141,17 +150,16 @@ public class CameraXActivity extends AppCompatActivity {
 
     // TODO: Move the analysis processing, capture processing to separate threads, so
     // there is smaller impact on the preview.
-    private View mViewFinder;
+    View mViewFinder;
     private List<UseCase> mUseCases;
     private ExecutorService mImageCaptureExecutorService;
-    private Camera mCamera;
+    Camera mCamera;
 
     private ToggleButton mVideoToggle;
     private ToggleButton mPhotoToggle;
     private ToggleButton mAnalysisToggle;
     private ToggleButton mPreviewToggle;
 
-    private Button mRecord;
     private Button mTakePicture;
     private ImageButton mCameraDirectionButton;
     private ImageButton mFlashButton;
@@ -165,6 +173,7 @@ public class CameraXActivity extends AppCompatActivity {
 
     private OpenGLRenderer mPreviewRenderer;
     private DisplayManager.DisplayListener mDisplayListener;
+    private RecordUi mRecordUi;
 
     SessionImagesUriSet mSessionImagesUriSet = new SessionImagesUriSet();
 
@@ -191,7 +200,6 @@ public class CameraXActivity extends AppCompatActivity {
     private FutureCallback<Integer> mEVFutureCallback = new FutureCallback<Integer>() {
 
         @Override
-        @OptIn(markerClass = androidx.camera.core.ExperimentalExposureCompensation.class)
         public void onSuccess(@Nullable Integer result) {
             CameraInfo cameraInfo = getCameraInfo();
             if (cameraInfo != null) {
@@ -213,6 +221,20 @@ public class CameraXActivity extends AppCompatActivity {
     // Listener that handles all ToggleButton events.
     private CompoundButton.OnCheckedChangeListener mOnCheckedChangeListener =
             (compoundButton, isChecked) -> tryBindUseCases();
+
+    private Consumer<Long> mFrameUpdateListener = timestamp -> {
+        if (mPreviewFrameCount.getAndIncrement() >= FRAMES_UNTIL_VIEW_IS_READY) {
+            try {
+                if (!this.mViewIdlingResource.isIdleNow()) {
+                    Log.d(TAG, FRAMES_UNTIL_VIEW_IS_READY + " or more counted on preview."
+                            + " Make IdlingResource idle.");
+                    this.mViewIdlingResource.decrement();
+                }
+            } catch (IllegalStateException e) {
+                Log.e(TAG, "Unexpected decrement. Continuing");
+            }
+        }
+    };
 
     // Espresso testing variables
     private final CountingIdlingResource mViewIdlingResource = new CountingIdlingResource("view");
@@ -306,7 +328,6 @@ public class CameraXActivity extends AppCompatActivity {
         return mPhotoToggle.isChecked() && cameraInfo != null && cameraInfo.hasFlashUnit();
     }
 
-    @OptIn(markerClass = androidx.camera.core.ExperimentalExposureCompensation.class)
     private boolean isExposureCompensationSupported() {
         CameraInfo cameraInfo = getCameraInfo();
         return cameraInfo != null
@@ -328,27 +349,117 @@ public class CameraXActivity extends AppCompatActivity {
     }
 
     private void setUpRecordButton() {
-        mRecord.setOnClickListener((view) -> {
-            String text = mRecord.getText().toString();
-            if (text.equals("Record") && !mVideoFileSaver.isSaving()) {
-                createDefaultVideoFolderIfNotExist();
-
-                getVideoCapture().startRecording(mVideoFileSaver.getNewVideoOutputFileOptions(
-                        getApplicationContext().getContentResolver()),
-                        ContextCompat.getMainExecutor(CameraXActivity.this), mVideoFileSaver);
-
-                mVideoFileSaver.setSaving();
-                mRecord.setText("Stop");
-            } else if (text.equals("Stop") && mVideoFileSaver.isSaving()) {
-                mRecord.setText("Record");
-                getVideoCapture().stopRecording();
-            } else if (text.equals("Record") && mVideoFileSaver.isSaving()) {
-                mRecord.setText("Stop");
-                mVideoFileSaver.setSaving();
-            } else if (text.equals("Stop") && !mVideoFileSaver.isSaving()) {
-                mRecord.setText("Record");
+        mRecordUi.getButtonRecord().setOnClickListener((view) -> {
+            RecordUi.State state = mRecordUi.getState();
+            switch (state) {
+                case IDLE:
+                    createDefaultVideoFolderIfNotExist();
+                    mActiveRecording = getVideoCapture().getOutput()
+                            .prepareRecording(getNewVideoOutputFileOptions())
+                            .withEventListener(ContextCompat.getMainExecutor(CameraXActivity.this),
+                                    mVideoRecordEventListener)
+                            .start();
+                    mRecordUi.setState(RecordUi.State.RECORDING);
+                    break;
+                case RECORDING:
+                case PAUSED:
+                    mActiveRecording.stop();
+                    mActiveRecording = null;
+                    mRecordUi.setState(RecordUi.State.STOPPING);
+                    break;
+                case STOPPING:
+                    // Record button should be disabled.
+                default:
+                    throw new IllegalStateException(
+                            "Unexpected state when click record button: " + state);
             }
         });
+
+        mRecordUi.getButtonPause().setOnClickListener(view -> {
+            RecordUi.State state = mRecordUi.getState();
+            switch (state) {
+                case RECORDING:
+                    mActiveRecording.pause();
+                    mRecordUi.setState(RecordUi.State.PAUSED);
+                    break;
+                case PAUSED:
+                    mActiveRecording.resume();
+                    mRecordUi.setState(RecordUi.State.RECORDING);
+                    break;
+                case IDLE:
+                case STOPPING:
+                    // Pause button should be invisible.
+                default:
+                    throw new IllegalStateException(
+                            "Unexpected state when click pause button: " + state);
+            }
+        });
+    }
+
+    private final Consumer<VideoRecordEvent> mVideoRecordEventListener = event -> {
+        updateRecordingStats(event.getRecordingStats());
+
+        switch (event.getEventType()) {
+            case FINALIZE:
+                VideoRecordEvent.Finalize finalize = (VideoRecordEvent.Finalize) event;
+
+                switch (finalize.getError()) {
+                    case VideoRecordEvent.ERROR_NONE:
+                    case VideoRecordEvent.ERROR_FILE_SIZE_LIMIT_REACHED:
+                    case VideoRecordEvent.ERROR_INSUFFICIENT_DISK:
+                        Uri uri = finalize.getOutputResults().getOutputUri();
+                        String msg = "Saved uri " + uri;
+                        if (finalize.getError() != VideoRecordEvent.ERROR_NONE) {
+                            msg += " with error (" + finalize.getError() + ")";
+                        }
+                        // The video file path is used in tracing e2e test log. Don't remove it.
+                        String videoFile = getAbsolutePathFromUri(
+                                getApplicationContext().getContentResolver(),
+                                uri
+                        );
+                        Log.d(TAG, "Saved video file: " + videoFile);
+
+                        Log.d(TAG, msg, finalize.getCause());
+                        Toast.makeText(CameraXActivity.this, msg, Toast.LENGTH_LONG).show();
+                        break;
+                    default:
+                        String errMsg = "Video capture failed by (" + finalize.getError() + "): "
+                                + finalize.getCause();
+                        Log.e(TAG, errMsg, finalize.getCause());
+                        Toast.makeText(CameraXActivity.this, errMsg, Toast.LENGTH_LONG).show();
+                }
+                mRecordUi.setState(RecordUi.State.IDLE);
+                break;
+
+            default:
+                // No-op
+                break;
+        }
+    };
+
+    @NonNull
+    private MediaStoreOutputOptions getNewVideoOutputFileOptions() {
+        String videoFileName = "video_" + System.currentTimeMillis();
+        ContentValues contentValues = new ContentValues();
+        contentValues.put(MediaStore.MediaColumns.MIME_TYPE, "video/mp4");
+        contentValues.put(MediaStore.Video.Media.TITLE, videoFileName);
+        contentValues.put(MediaStore.Video.Media.DISPLAY_NAME, videoFileName);
+        contentValues.put(MediaStore.Video.Media.DATE_ADDED, System.currentTimeMillis() / 1000);
+        contentValues.put(MediaStore.Video.Media.DATE_TAKEN, System.currentTimeMillis());
+        return MediaStoreOutputOptions.builder()
+                .setContentResolver(getContentResolver())
+                .setCollection(MediaStore.Video.Media.EXTERNAL_CONTENT_URI)
+                .setContentValues(contentValues)
+                .build();
+    }
+
+    private void updateRecordingStats(@NonNull RecordingStats stats) {
+        double durationSec = TimeUnit.NANOSECONDS.toMillis(stats.getRecordedDurationNanos())
+                / 1000d;
+        // Show megabytes in International System of Units (SI)
+        double sizeMb = stats.getNumBytesRecorded() / (1000d * 1000d);
+        String msg = String.format("%.2f sec\n%.2f MB", durationSec, sizeMb);
+        mRecordUi.getTextStats().setText(msg);
     }
 
     private void setUpTakePictureButton() {
@@ -446,7 +557,6 @@ public class CameraXActivity extends AppCompatActivity {
         });
     }
 
-    @OptIn(markerClass = androidx.camera.core.ExperimentalExposureCompensation.class)
     private void setUpEVButton() {
         mPlusEV.setOnClickListener(v -> {
             Objects.requireNonNull(getCameraInfo());
@@ -492,7 +602,7 @@ public class CameraXActivity extends AppCompatActivity {
     }
 
     private void updateButtonsUi() {
-        mRecord.setEnabled(mVideoToggle.isChecked());
+        mRecordUi.setEnabled(mVideoToggle.isChecked());
         mTakePicture.setEnabled(mPhotoToggle.isChecked());
         mCaptureQualityToggle.setEnabled(mPhotoToggle.isChecked());
         mCameraDirectionButton.setEnabled(getCameraInfo() != null);
@@ -550,7 +660,6 @@ public class CameraXActivity extends AppCompatActivity {
         mPreviewToggle = findViewById(R.id.PreviewToggle);
 
         mTakePicture = findViewById(R.id.Picture);
-        mRecord = findViewById(R.id.Video);
         mFlashButton = findViewById(R.id.flash_toggle);
         mCameraDirectionButton = findViewById(R.id.direction_toggle);
         mTorchButton = findViewById(R.id.torch_toggle);
@@ -561,9 +670,14 @@ public class CameraXActivity extends AppCompatActivity {
         mZoomRatioLabel = findViewById(R.id.zoomRatio);
 
         mTextView = findViewById(R.id.textView);
+        mRecordUi = new RecordUi(
+                findViewById(R.id.Video),
+                findViewById(R.id.video_pause),
+                findViewById(R.id.video_stats)
+        );
 
         setUpButtonEvents();
-        setupPinchToZoom();
+        setupViewFinderGestureControls();
 
         mImageAnalysisResult.observe(
                 this,
@@ -599,21 +713,6 @@ public class CameraXActivity extends AppCompatActivity {
         DisplayManager dpyMgr =
                 Objects.requireNonNull((DisplayManager) getSystemService(Context.DISPLAY_SERVICE));
         dpyMgr.registerDisplayListener(mDisplayListener, new Handler(Looper.getMainLooper()));
-
-        previewRenderer.setFrameUpdateListener(ContextCompat.getMainExecutor(this), timestamp -> {
-            // Wait until surface texture receives enough updates. This is for testing.
-            if (mPreviewFrameCount.getAndIncrement() >= FRAMES_UNTIL_VIEW_IS_READY) {
-                try {
-                    if (!mViewIdlingResource.isIdleNow()) {
-                        Log.d(TAG, FRAMES_UNTIL_VIEW_IS_READY + " or more counted on preview."
-                                + " Make IdlingResource idle.");
-                        mViewIdlingResource.decrement();
-                    }
-                } catch (IllegalStateException e) {
-                    Log.e(TAG, "Unexpected decrement. Continuing");
-                }
-            }
-        });
 
         StrictMode.VmPolicy vmPolicy =
                 new StrictMode.VmPolicy.Builder().detectAll().penaltyLog().build();
@@ -686,6 +785,17 @@ public class CameraXActivity extends AppCompatActivity {
             // next thing being ready.
             return;
         }
+        // Clear listening frame update before unbind all.
+        mPreviewRenderer.clearFrameUpdateListener();
+
+        // Stop video recording if exists.
+        if (mRecordUi.getState() == RecordUi.State.RECORDING
+                || mRecordUi.getState() == RecordUi.State.PAUSED) {
+            mActiveRecording.stop();
+            mActiveRecording = null;
+            mRecordUi.setState(RecordUi.State.STOPPING);
+        }
+
         mCameraProvider.unbindAll();
         try {
             List<UseCase> useCases = buildUseCases();
@@ -720,7 +830,14 @@ public class CameraXActivity extends AppCompatActivity {
                     .setTargetName("Preview")
                     .build();
             resetViewIdlingResource();
-            mPreviewRenderer.attachInputPreview(preview);
+            // Use the listener of the future to make sure the Preview setup the new surface.
+            mPreviewRenderer.attachInputPreview(preview).addListener(() -> {
+                Log.d(TAG, "OpenGLRenderer get the new surface for the Preview");
+                mPreviewRenderer.setFrameUpdateListener(
+                        ContextCompat.getMainExecutor(this), mFrameUpdateListener
+                );
+            }, ContextCompat.getMainExecutor(this));
+
             useCases.add(preview);
         }
 
@@ -743,10 +860,8 @@ public class CameraXActivity extends AppCompatActivity {
         }
 
         if (mVideoToggle.isChecked()) {
-            mVideoFileSaver = new VideoFileSaver();
-            VideoCapture videoCapture = new VideoCapture.Builder()
-                    .setTargetName("VideoCapture")
-                    .build();
+            VideoCapture<Recorder> videoCapture =
+                    VideoCapture.withOutput(new Recorder.Builder().build());
             useCases.add(videoCapture);
         }
         return useCases;
@@ -822,21 +937,9 @@ public class CameraXActivity extends AppCompatActivity {
     }
 
     /**
-     * Workaround method for an AndroidX issue where {@link UseExperimental} doesn't support 2 or
-     * more annotations.
-     */
-    @OptIn(markerClass = ExperimentalUseCaseGroupLifecycle.class)
-    private Camera bindToLifecycleSafely(List<UseCase> useCases) {
-        Log.e(TAG, "Binding use cases " + useCases);
-        return bindToLifecycleSafelyWithExperimental(useCases);
-    }
-
-    /**
      * Binds use cases to the current lifecycle.
      */
-    @OptIn(markerClass = ExperimentalUseCaseGroup.class)
-    @ExperimentalUseCaseGroupLifecycle
-    private Camera bindToLifecycleSafelyWithExperimental(List<UseCase> useCases) {
+    private Camera bindToLifecycleSafely(List<UseCase> useCases) {
         ViewPort viewPort = new ViewPort.Builder(new Rational(mViewFinder.getWidth(),
                 mViewFinder.getHeight()),
                 mViewFinder.getDisplay().getRotation())
@@ -899,19 +1002,39 @@ public class CameraXActivity extends AppCompatActivity {
                 }
             };
 
-    private void setupPinchToZoom() {
-        ScaleGestureDetector scaleDetector = new ScaleGestureDetector(this, mScaleGestureListener);
-        mViewFinder.setOnTouchListener(new View.OnTouchListener() {
-            @Override
-            public boolean onTouch(View view, MotionEvent motionEvent) {
-                scaleDetector.onTouchEvent(motionEvent);
+    GestureDetector.OnGestureListener onTapGestureListener =
+            new GestureDetector.SimpleOnGestureListener() {
+                @Override
+                public boolean onSingleTapUp(MotionEvent e) {
+                    // Since we are showing full camera preview we will be using
+                    // DisplayOrientedMeteringPointFactory to map the view's (x, y) to a
+                    // metering point.
+                    MeteringPointFactory factory =
+                            new DisplayOrientedMeteringPointFactory(
+                                    mViewFinder.getDisplay(),
+                                    mCamera.getCameraInfo(),
+                                    mViewFinder.getWidth(),
+                                    mViewFinder.getHeight());
+                    FocusMeteringAction action = new FocusMeteringAction.Builder(
+                            factory.createPoint(e.getX(), e.getY())
+                    ).build();
+                    Futures.addCallback(
+                            mCamera.getCameraControl().startFocusAndMetering(action),
+                            new FutureCallback<FocusMeteringResult>() {
+                                @Override
+                                public void onSuccess(FocusMeteringResult result) {
+                                    Log.d(TAG, "Focus and metering succeeded.");
+                                }
 
-                return true;
-            }
-        });
-
-
-    }
+                                @Override
+                                public void onFailure(Throwable t) {
+                                    Log.e(TAG, "Focus and metering failed.", t);
+                                }
+                            },
+                            CameraXExecutors.mainThreadExecutor());
+                    return true;
+                }
+            };
 
     private void setupZoomSeeker() {
         CameraControl cameraControl = mCamera.getCameraControl();
@@ -966,6 +1089,16 @@ public class CameraXActivity extends AppCompatActivity {
             });
     }
 
+    private void setupViewFinderGestureControls() {
+        GestureDetector tapGestureDetector = new GestureDetector(this, onTapGestureListener);
+        ScaleGestureDetector scaleDetector = new ScaleGestureDetector(this, mScaleGestureListener);
+        mViewFinder.setOnTouchListener((view, e) -> {
+            boolean tapEventProcessed = tapGestureDetector.onTouchEvent(e);
+            boolean scaleEventProcessed = scaleDetector.onTouchEvent(e);
+            return tapEventProcessed || scaleEventProcessed;
+        });
+    }
+
     /** Gets the absolute path from a Uri. */
     @Nullable
     @SuppressWarnings("deprecation")
@@ -1017,6 +1150,95 @@ public class CameraXActivity extends AppCompatActivity {
         }
     }
 
+    @UiThread
+    private static class RecordUi {
+
+        enum State {
+            IDLE, RECORDING, PAUSED, STOPPING
+        }
+
+        private final Button mButtonRecord;
+        private final Button mButtonPause;
+        private final TextView mTextStats;
+        private boolean mEnabled = false;
+        private State mState = State.IDLE;
+
+        RecordUi(@NonNull Button buttonRecord, @NonNull Button buttonPause,
+                @NonNull TextView textStats) {
+            mButtonRecord = buttonRecord;
+            mButtonPause = buttonPause;
+            mTextStats = textStats;
+        }
+
+        void setEnabled(boolean enabled) {
+            mEnabled = enabled;
+            if (enabled) {
+                mTextStats.setText("");
+                mTextStats.setVisibility(View.VISIBLE);
+                updateUi();
+            } else {
+                mButtonRecord.setText("Record");
+                mButtonRecord.setEnabled(false);
+                mButtonPause.setVisibility(View.INVISIBLE);
+                mTextStats.setVisibility(View.GONE);
+            }
+        }
+
+        void setState(@NonNull State state) {
+            mState = state;
+            updateUi();
+        }
+
+        @NonNull
+        State getState() {
+            return mState;
+        }
+
+        private void updateUi() {
+            if (!mEnabled) {
+                return;
+            }
+            switch (mState) {
+                case IDLE:
+                    mButtonRecord.setText("Record");
+                    mButtonRecord.setEnabled(true);
+                    mButtonPause.setText("Pause");
+                    mButtonPause.setVisibility(View.INVISIBLE);
+                    break;
+                case RECORDING:
+                    mButtonRecord.setText("Stop");
+                    mButtonRecord.setEnabled(true);
+                    mButtonPause.setText("Pause");
+                    mButtonPause.setVisibility(View.VISIBLE);
+                    break;
+                case STOPPING:
+                    mButtonRecord.setText("Saving");
+                    mButtonRecord.setEnabled(false);
+                    mButtonPause.setText("Pause");
+                    mButtonPause.setVisibility(View.INVISIBLE);
+                    break;
+                case PAUSED:
+                    mButtonRecord.setText("Stop");
+                    mButtonRecord.setEnabled(true);
+                    mButtonPause.setText("Resume");
+                    mButtonPause.setVisibility(View.VISIBLE);
+                    break;
+            }
+        }
+
+        Button getButtonRecord() {
+            return mButtonRecord;
+        }
+
+        Button getButtonPause() {
+            return mButtonPause;
+        }
+
+        TextView getTextStats() {
+            return mTextStats;
+        }
+    }
+
     Preview getPreview() {
         return findUseCase(Preview.class);
     }
@@ -1029,7 +1251,8 @@ public class CameraXActivity extends AppCompatActivity {
         return findUseCase(ImageCapture.class);
     }
 
-    VideoCapture getVideoCapture() {
+    @SuppressWarnings("unchecked")
+    VideoCapture<Recorder> getVideoCapture() {
         return findUseCase(VideoCapture.class);
     }
 

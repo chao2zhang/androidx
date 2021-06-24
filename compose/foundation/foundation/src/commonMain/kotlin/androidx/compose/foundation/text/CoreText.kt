@@ -20,10 +20,13 @@ package androidx.compose.foundation.text
 import androidx.compose.foundation.fastMapIndexedNotNull
 import androidx.compose.foundation.text.selection.LocalSelectionRegistrar
 import androidx.compose.foundation.text.selection.LocalTextSelectionColors
+import androidx.compose.foundation.text.selection.MouseSelectionObserver
 import androidx.compose.foundation.text.selection.MultiWidgetSelectionDelegate
 import androidx.compose.foundation.text.selection.Selectable
+import androidx.compose.foundation.text.selection.SelectionAdjustment
 import androidx.compose.foundation.text.selection.SelectionRegistrar
 import androidx.compose.foundation.text.selection.hasSelection
+import androidx.compose.foundation.text.selection.mouseSelectionDetector
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.DisposableEffectResult
@@ -34,7 +37,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Paint
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
@@ -90,7 +93,10 @@ private typealias InlineContentRange = AnnotatedString.Range<@Composable (String
  * [overflow] and [softWrap]. If it is not null, then it must be greater than zero.
  * @param inlineContent A map store composables that replaces certain ranges of the text. It's
  * used to insert composables into text layout. Check [InlineTextContent] for more information.
- * @param onTextLayout Callback that is executed when a new text layout is calculated.
+ * @param onTextLayout Callback that is executed when a new text layout is calculated. A
+ * [TextLayoutResult] object that callback provides contains paragraph information, size of the
+ * text, baselines and other details. The callback can be used to add additional decoration or
+ * functionality to the text. For example, to draw selection around the text.
  */
 @Composable
 @OptIn(InternalFoundationTextApi::class)
@@ -151,7 +157,7 @@ internal fun CoreText(
         placeholders = placeholders
     )
     state.onTextLayout = onTextLayout
-    state.selectionPaint.color = selectionBackgroundColor
+    state.selectionBackgroundColor = selectionBackgroundColor
 
     val controller = remember { TextController(state) }
     controller.update(selectionRegistrar)
@@ -173,7 +179,12 @@ internal fun CoreText(
                             )
                         }
                     } else {
-                        Modifier.mouseDragGestureFilter(controller.longPressDragObserver, true)
+                        Modifier.pointerInput(controller.mouseSelectionObserver) {
+                            mouseSelectionDetector(
+                                controller.mouseSelectionObserver,
+                                finalPass = true
+                            )
+                        }
                     }
                 } else {
                     Modifier
@@ -364,10 +375,17 @@ internal class TextController(val state: TextState) {
             state.layoutCoordinates?.let {
                 if (!it.isAttached) return
 
-                selectionRegistrar?.notifySelectionUpdateStart(
-                    layoutCoordinates = it,
-                    startPosition = startPoint
-                )
+                if (outOfBoundary(startPoint, startPoint)) {
+                    selectionRegistrar?.notifySelectionUpdateSelectAll(
+                        selectableId = state.selectableId
+                    )
+                } else {
+                    selectionRegistrar?.notifySelectionUpdateStart(
+                        layoutCoordinates = it,
+                        startPosition = startPoint,
+                        adjustment = SelectionAdjustment.WORD
+                    )
+                }
 
                 dragBeginPosition = startPoint
             }
@@ -385,11 +403,14 @@ internal class TextController(val state: TextState) {
 
                 dragTotalDistance += delta
 
-                selectionRegistrar?.notifySelectionUpdate(
-                    layoutCoordinates = it,
-                    startPosition = dragBeginPosition,
-                    endPosition = dragBeginPosition + dragTotalDistance
-                )
+                if (!outOfBoundary(dragBeginPosition, dragBeginPosition + dragTotalDistance)) {
+                    selectionRegistrar?.notifySelectionUpdate(
+                        layoutCoordinates = it,
+                        startPosition = dragBeginPosition,
+                        endPosition = dragBeginPosition + dragTotalDistance,
+                        adjustment = SelectionAdjustment.CHARACTER
+                    )
+                }
             }
         }
 
@@ -406,6 +427,86 @@ internal class TextController(val state: TextState) {
         }
     }
 
+    val mouseSelectionObserver = object : MouseSelectionObserver {
+        var dragBeginPosition = Offset.Zero
+
+        override fun onExtend(downPosition: Offset): Boolean {
+            state.layoutCoordinates?.let {
+                if (!it.isAttached) return false
+
+                selectionRegistrar?.notifySelectionUpdate(
+                    layoutCoordinates = it,
+                    endPosition = downPosition,
+                    adjustment = SelectionAdjustment.NONE
+                )
+                return selectionRegistrar.hasSelection(state.selectableId)
+            }
+            return false
+        }
+
+        override fun onExtendDrag(dragPosition: Offset): Boolean {
+            state.layoutCoordinates?.let {
+                if (!it.isAttached) return false
+                if (!selectionRegistrar.hasSelection(state.selectableId)) return false
+
+                selectionRegistrar?.notifySelectionUpdate(
+                    layoutCoordinates = it,
+                    endPosition = dragPosition,
+                    adjustment = SelectionAdjustment.NONE
+                )
+            }
+            return true
+        }
+
+        override fun onStart(
+            downPosition: Offset,
+            adjustment: SelectionAdjustment
+        ): Boolean {
+            state.layoutCoordinates?.let {
+                if (!it.isAttached) return false
+
+                selectionRegistrar?.notifySelectionUpdate(
+                    layoutCoordinates = it,
+                    startPosition = downPosition,
+                    endPosition = downPosition,
+                    adjustment = adjustment
+                )
+
+                dragBeginPosition = downPosition
+                return selectionRegistrar.hasSelection(state.selectableId)
+            }
+
+            return false
+        }
+
+        override fun onDrag(dragPosition: Offset, adjustment: SelectionAdjustment): Boolean {
+            state.layoutCoordinates?.let {
+                if (!it.isAttached) return false
+                if (!selectionRegistrar.hasSelection(state.selectableId)) return false
+
+                selectionRegistrar?.notifySelectionUpdate(
+                    layoutCoordinates = it,
+                    startPosition = dragBeginPosition,
+                    endPosition = dragPosition,
+                    adjustment = adjustment
+                )
+            }
+            return true
+        }
+    }
+
+    private fun outOfBoundary(start: Offset, end: Offset): Boolean {
+        state.layoutResult?.let {
+            val lastOffset = it.layoutInput.text.text.length
+            val rawStartOffset = it.getOffsetForPosition(start)
+            val rawEndOffset = it.getOffsetForPosition(end)
+
+            return rawStartOffset >= lastOffset - 1 && rawEndOffset >= lastOffset - 1 ||
+                rawStartOffset < 0 && rawEndOffset < 0
+        }
+        return false
+    }
+
     /**
      * Draw the given selection on the canvas.
      */
@@ -413,12 +514,9 @@ internal class TextController(val state: TextState) {
     @OptIn(InternalFoundationTextApi::class)
     private fun Modifier.drawTextAndSelectionBehind(): Modifier =
         this.graphicsLayer().drawBehind {
-            drawIntoCanvas { canvas ->
-                val textLayoutResult = state.layoutResult
-                val selectionPaint = state.selectionPaint
+            state.layoutResult?.let {
                 val selection = selectionRegistrar?.subselections?.get(state.selectableId)
 
-                if (textLayoutResult == null) return@drawIntoCanvas
                 if (selection != null) {
                     val start = if (!selection.handlesCrossed) {
                         selection.start.offset
@@ -430,15 +528,15 @@ internal class TextController(val state: TextState) {
                     } else {
                         selection.start.offset
                     }
-                    TextDelegate.paintBackground(
-                        start,
-                        end,
-                        selectionPaint,
-                        canvas,
-                        textLayoutResult
-                    )
+
+                    if (start != end) {
+                        val selectionPath = it.multiParagraph.getPathForRange(start, end)
+                        drawPath(selectionPath, state.selectionBackgroundColor)
+                    }
                 }
-                TextDelegate.paint(canvas, textLayoutResult)
+                drawIntoCanvas { canvas ->
+                    TextDelegate.paint(canvas, it)
+                }
             }
         }
 }
@@ -464,8 +562,8 @@ internal class TextState(
     /** The global position calculated during the last notifyPosition callback */
     var previousGlobalPosition: Offset = Offset.Zero
 
-    /** The paint used to draw highlight background for selected text. */
-    val selectionPaint: Paint = Paint()
+    /** The background color of selection */
+    var selectionBackgroundColor: Color = Color.Unspecified
 }
 
 /**

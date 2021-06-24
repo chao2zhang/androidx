@@ -16,9 +16,31 @@
 
 package androidx.fragment.app.strictmode;
 
-import androidx.annotation.RestrictTo;
+import androidx.annotation.NonNull;
+import androidx.fragment.app.Fragment;
 
 /** See #{@link FragmentStrictMode.Policy.Builder#detectFragmentReuse()}. */
-@RestrictTo(RestrictTo.Scope.LIBRARY) // TODO: Make API public as soon as we have a few checks
 public final class FragmentReuseViolation extends Violation {
+
+    @NonNull
+    private final String mPreviousWho;
+
+    FragmentReuseViolation(@NonNull Fragment fragment, @NonNull String previousWho) {
+        super(fragment);
+        this.mPreviousWho = previousWho;
+    }
+
+    /**
+     * Gets the unique ID of the previous instance of the {@link Fragment} causing the Violation.
+     */
+    @NonNull
+    public String getPreviousFragmentId() {
+        return mPreviousWho;
+    }
+
+    @NonNull
+    @Override
+    public String getMessage() {
+        return "Attempting to reuse fragment " + mFragment + " with previous ID " + mPreviousWho;
+    }
 }

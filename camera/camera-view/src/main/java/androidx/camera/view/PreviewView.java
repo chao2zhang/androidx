@@ -16,7 +16,7 @@
 
 package androidx.camera.view;
 
-import static androidx.camera.view.transform.OutputTransform.getNormalizedToBuffer;
+import static androidx.camera.view.TransformUtils.getNormalizedToBuffer;
 
 import android.annotation.SuppressLint;
 import android.content.Context;
@@ -45,7 +45,6 @@ import androidx.annotation.ColorRes;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.OptIn;
-import androidx.annotation.RestrictTo;
 import androidx.annotation.UiThread;
 import androidx.annotation.VisibleForTesting;
 import androidx.camera.core.CameraControl;
@@ -69,6 +68,7 @@ import androidx.camera.view.internal.compat.quirk.SurfaceViewStretchedQuirk;
 import androidx.camera.view.transform.CoordinateTransform;
 import androidx.camera.view.transform.OutputTransform;
 import androidx.core.content.ContextCompat;
+import androidx.core.view.ViewCompat;
 import androidx.lifecycle.LiveData;
 import androidx.lifecycle.MutableLiveData;
 
@@ -230,10 +230,8 @@ public final class PreviewView extends FrameLayout {
         Threads.checkMainThread();
         final TypedArray attributes = context.getTheme().obtainStyledAttributes(attrs,
                 R.styleable.PreviewView, defStyleAttr, defStyleRes);
-        if (Build.VERSION.SDK_INT >= 29) {
-            saveAttributeDataForStyleable(context, R.styleable.PreviewView, attrs, attributes,
-                    defStyleAttr, defStyleRes);
-        }
+        ViewCompat.saveAttributeDataForStyleable(this, context, R.styleable.PreviewView, attrs,
+                attributes, defStyleAttr, defStyleRes);
 
         try {
             final int scaleTypeId = attributes.getInteger(
@@ -499,7 +497,6 @@ public final class PreviewView extends FrameLayout {
      */
     @UiThread
     @Nullable
-    @ExperimentalUseCaseGroup
     public ViewPort getViewPort() {
         Threads.checkMainThread();
         if (getDisplay() == null) {
@@ -550,7 +547,7 @@ public final class PreviewView extends FrameLayout {
     @UiThread
     @SuppressLint("WrongConstant")
     @Nullable
-    @ExperimentalUseCaseGroup
+    @OptIn(markerClass = ExperimentalUseCaseGroup.class)
     public ViewPort getViewPort(@ImageOutputConfig.RotationValue int targetRotation) {
         Threads.checkMainThread();
         if (getWidth() == 0 || getHeight() == 0) {
@@ -847,15 +844,12 @@ public final class PreviewView extends FrameLayout {
      *
      * <p> {@link PreviewView} needs to be in {@link ImplementationMode#COMPATIBLE} mode for the
      * transform to work correctly. For example, the returned {@link OutputTransform} may
-     * not respect the value of {@link #getScaleX()} when {@link ImplementationMode#PERFORMANCE}
+     * not respect the value of {@link #getMatrix()} when {@link ImplementationMode#PERFORMANCE}
      * mode is used.
      *
      * @return the transform applied on the preview by this {@link PreviewView}.
-     * @hide
      * @see CoordinateTransform
      */
-    // TODO(b/179827713): unhide this once all transform utils are done.
-    @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
     @TransformExperimental
     @Nullable
     public OutputTransform getOutputTransform() {
@@ -873,7 +867,7 @@ public final class PreviewView extends FrameLayout {
             Logger.d(TAG, "Transform info is not ready");
             return null;
         }
-        // Map it to the normalized space (0, 0) - (1, 1).
+        // Map it to the normalized space (-1, -1) - (1, 1).
         matrix.preConcat(getNormalizedToBuffer(surfaceCropRect));
 
         // Add the custom transform applied by the app. e.g. View#setScaleX.

@@ -27,16 +27,19 @@ import android.util.Log;
 import androidx.annotation.MainThread;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
-import androidx.wear.tiles.builders.ResourceBuilders.Resources;
-import androidx.wear.tiles.builders.TileBuilders.Tile;
-import androidx.wear.tiles.builders.TileBuilders.Version;
+import androidx.wear.tiles.EventBuilders.TileAddEvent;
+import androidx.wear.tiles.EventBuilders.TileEnterEvent;
+import androidx.wear.tiles.EventBuilders.TileLeaveEvent;
+import androidx.wear.tiles.EventBuilders.TileRemoveEvent;
+import androidx.wear.tiles.RequestBuilders.ResourcesRequest;
+import androidx.wear.tiles.RequestBuilders.TileRequest;
+import androidx.wear.tiles.ResourceBuilders.Resources;
+import androidx.wear.tiles.TileBuilders.Tile;
+import androidx.wear.tiles.TileBuilders.Version;
+import androidx.wear.tiles.proto.EventProto;
+import androidx.wear.tiles.proto.RequestProto;
 import androidx.wear.tiles.proto.TileProto;
-import androidx.wear.tiles.readers.EventReaders.TileAddEvent;
-import androidx.wear.tiles.readers.EventReaders.TileEnterEvent;
-import androidx.wear.tiles.readers.EventReaders.TileLeaveEvent;
-import androidx.wear.tiles.readers.EventReaders.TileRemoveEvent;
-import androidx.wear.tiles.readers.RequestReaders.ResourcesRequest;
-import androidx.wear.tiles.readers.RequestReaders.TileRequest;
+import androidx.wear.tiles.protobuf.InvalidProtocolBufferException;
 
 import com.google.common.util.concurrent.ListenableFuture;
 
@@ -79,8 +82,11 @@ public abstract class TileProviderService extends Service {
     public static final String METADATA_PREVIEW_KEY = "androidx.wear.tiles.PREVIEW";
 
     /**
-     * Called when the system is requesting a new timeline from this Tile Provider. Note that this
-     * may be called from a background thread.
+     * Called when the system is requesting a new timeline from this Tile Provider. The returned
+     * future must complete after at most 10 seconds from the moment this method is called (exact
+     * timeout length subject to change).
+     *
+     * <p>Note that this is called from your app's main thread, which is usually also the UI thread.
      *
      * @param requestParams Parameters about the request. See {@link TileRequest} for more info.
      */
@@ -89,11 +95,14 @@ public abstract class TileProviderService extends Service {
     protected abstract ListenableFuture<Tile> onTileRequest(@NonNull TileRequest requestParams);
 
     /**
-     * Called when the system is requesting a resource bundle from this Tile Provider. Note that
-     * this may be called from a background thread.
+     * Called when the system is requesting a resource bundle from this Tile Provider. The returned
+     * future must complete after at most 10 seconds from the moment this method is called (exact
+     * timeout length subject to change).
+     *
+     * <p>Note that this is called from your app's main thread, which is usually also the UI thread.
      *
      * @param requestParams Parameters about the request. See {@link ResourcesRequest} for more
-     *                      info.
+     *     info.
      */
     @MainThread
     @NonNull
@@ -101,41 +110,41 @@ public abstract class TileProviderService extends Service {
             @NonNull ResourcesRequest requestParams);
 
     /**
-     * Called when a tile provided by this Tile Provider is added to the carousel. Note that this
-     * may be called from a background thread.
+     * Called when a tile provided by this Tile Provider is added to the carousel.
      *
-     * @param requestParams Parameters about the request. See {@link TileAddEvent} for more
-     *     info.
+     * <p>Note that this is called from your app's main thread, which is usually also the UI thread.
+     *
+     * @param requestParams Parameters about the request. See {@link TileAddEvent} for more info.
      */
     @MainThread
     protected void onTileAddEvent(@NonNull TileAddEvent requestParams) {}
 
     /**
-     * Called when a tile provided by this Tile Provider is removed from the carousel. Note that
-     * this may be called from a background thread.
+     * Called when a tile provided by this Tile Provider is removed from the carousel.
      *
-     * @param requestParams Parameters about the request. See {@link TileRemoveEvent} for more
-     *     info.
+     * <p>Note that this is called from your app's main thread, which is usually also the UI thread.
+     *
+     * @param requestParams Parameters about the request. See {@link TileRemoveEvent} for more info.
      */
     @MainThread
     protected void onTileRemoveEvent(@NonNull TileRemoveEvent requestParams) {}
 
     /**
-     * Called when a tile provided by this Tile Provider becomes into view, on screen. Note that
-     * this may be called from a background thread.
+     * Called when a tile provided by this Tile Provider becomes into view, on screen.
      *
-     * @param requestParams Parameters about the request. See {@link TileEnterEvent} for more
-     *     info.
+     * <p>Note that this is called from your app's main thread, which is usually also the UI thread.
+     *
+     * @param requestParams Parameters about the request. See {@link TileEnterEvent} for more info.
      */
     @MainThread
     protected void onTileEnterEvent(@NonNull TileEnterEvent requestParams) {}
 
     /**
-     * Called when a tile provided by this Tile Provider goes out of view, on screen. Note that this
-     * may be called from a background thread.
+     * Called when a tile provided by this Tile Provider goes out of view, on screen.
      *
-     * @param requestParams Parameters about the request. See {@link TileLeaveEvent} for more
-     *     info.
+     * <p>Note that this is called from your app's main thread, which is usually also the UI thread.
+     *
+     * @param requestParams Parameters about the request. See {@link TileLeaveEvent} for more info.
      */
     @MainThread
     protected void onTileLeaveEvent(@NonNull TileLeaveEvent requestParams) {}
@@ -202,10 +211,20 @@ public abstract class TileProviderService extends Service {
                                 return;
                             }
 
-                            // TODO(b/166074385): Add tileId to TileRequest
+                            TileRequest tileRequest;
+
+                            try {
+                                tileRequest =
+                                        TileRequest.fromProto(
+                                                RequestProto.TileRequest.parseFrom(
+                                                        requestParams.getContents()));
+                            } catch (InvalidProtocolBufferException ex) {
+                                Log.e(TAG, "Error deserializing TileRequest payload.", ex);
+                                return;
+                            }
+
                             ListenableFuture<Tile> tileFuture =
-                                    tileProviderService.onTileRequest(
-                                            TileRequest.fromParcelable(requestParams, tileId));
+                                    tileProviderService.onTileRequest(tileRequest);
 
                             tileFuture.addListener(
                                     () -> {
@@ -250,10 +269,20 @@ public abstract class TileProviderService extends Service {
                                 return;
                             }
 
-                            // TODO(b/166074385): Add tileId to ResourcesRequest
+                            ResourcesRequest req;
+
+                            try {
+                                req =
+                                        ResourcesRequest.fromProto(
+                                                RequestProto.ResourcesRequest.parseFrom(
+                                                        requestParams.getContents()));
+                            } catch (InvalidProtocolBufferException ex) {
+                                Log.e(TAG, "Error deserializing ResourcesRequest payload.", ex);
+                                return;
+                            }
+
                             ListenableFuture<Resources> resourcesFuture =
-                                    tileProviderService.onResourcesRequest(
-                                            ResourcesRequest.fromParcelable(requestParams, tileId));
+                                    tileProviderService.onResourcesRequest(req);
 
                             resourcesFuture.addListener(
                                     () -> {
@@ -295,7 +324,15 @@ public abstract class TileProviderService extends Service {
                                 return;
                             }
 
-                            tileProviderService.onTileAddEvent(TileAddEvent.fromParcelable(data));
+                            try {
+                                TileAddEvent evt =
+                                        TileAddEvent.fromProto(
+                                                EventProto.TileAddEvent.parseFrom(
+                                                        data.getContents()));
+                                tileProviderService.onTileAddEvent(evt);
+                            } catch (InvalidProtocolBufferException ex) {
+                                Log.e(TAG, "Error deserializing TileAddEvent payload.", ex);
+                            }
                         }
                     });
         }
@@ -315,8 +352,15 @@ public abstract class TileProviderService extends Service {
                                 return;
                             }
 
-                            tileProviderService.onTileRemoveEvent(
-                                    TileRemoveEvent.fromParcelable(data));
+                            try {
+                                TileRemoveEvent evt =
+                                        TileRemoveEvent.fromProto(
+                                                EventProto.TileRemoveEvent.parseFrom(
+                                                        data.getContents()));
+                                tileProviderService.onTileRemoveEvent(evt);
+                            } catch (InvalidProtocolBufferException ex) {
+                                Log.e(TAG, "Error deserializing TileRemoveEvent payload.", ex);
+                            }
                         }
                     });
         }
@@ -336,8 +380,15 @@ public abstract class TileProviderService extends Service {
                                 return;
                             }
 
-                            tileProviderService.onTileEnterEvent(
-                                    TileEnterEvent.fromParcelable(data));
+                            try {
+                                TileEnterEvent evt =
+                                        TileEnterEvent.fromProto(
+                                                EventProto.TileEnterEvent.parseFrom(
+                                                        data.getContents()));
+                                tileProviderService.onTileEnterEvent(evt);
+                            } catch (InvalidProtocolBufferException ex) {
+                                Log.e(TAG, "Error deserializing TileEnterEvent payload.", ex);
+                            }
                         }
                     });
         }
@@ -357,8 +408,15 @@ public abstract class TileProviderService extends Service {
                                 return;
                             }
 
-                            tileProviderService.onTileLeaveEvent(
-                                    TileLeaveEvent.fromParcelable(data));
+                            try {
+                                TileLeaveEvent evt =
+                                        TileLeaveEvent.fromProto(
+                                                EventProto.TileLeaveEvent.parseFrom(
+                                                        data.getContents()));
+                                tileProviderService.onTileLeaveEvent(evt);
+                            } catch (InvalidProtocolBufferException ex) {
+                                Log.e(TAG, "Error deserializing TileLeaveEvent payload.", ex);
+                            }
                         }
                     });
         }

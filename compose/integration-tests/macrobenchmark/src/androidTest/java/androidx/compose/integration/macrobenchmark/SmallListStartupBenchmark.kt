@@ -16,12 +16,12 @@
 
 package androidx.compose.integration.macrobenchmark
 
-import androidx.benchmark.integration.macrobenchmark.createStartupCompilationParams
-import androidx.benchmark.integration.macrobenchmark.measureStartup
 import androidx.benchmark.macro.CompilationMode
 import androidx.benchmark.macro.StartupMode
 import androidx.benchmark.macro.junit4.MacrobenchmarkRule
 import androidx.test.filters.LargeTest
+import androidx.testutils.createStartupCompilationParams
+import androidx.testutils.measureStartup
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -39,7 +39,8 @@ class SmallListStartupBenchmark(
     @Test
     fun startup() = benchmarkRule.measureStartup(
         compilationMode = compilationMode,
-        startupMode = startupMode
+        startupMode = startupMode,
+        packageName = "androidx.compose.integration.macrobenchmark.target"
     ) {
         action = "androidx.compose.integration.macrobenchmark.target.LAZY_COLUMN_ACTIVITY"
         putExtra("ITEM_COUNT", 5)
@@ -48,6 +49,8 @@ class SmallListStartupBenchmark(
     companion object {
         @Parameterized.Parameters(name = "startup={0},compilation={1}")
         @JvmStatic
-        fun parameters() = createStartupCompilationParams()
+        fun parameters() = createStartupCompilationParams(
+            compilationModes = COMPOSE_COMPILATION_MODES
+        )
     }
 }

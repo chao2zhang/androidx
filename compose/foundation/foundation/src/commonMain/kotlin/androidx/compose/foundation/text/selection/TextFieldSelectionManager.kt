@@ -16,12 +16,10 @@
 
 package androidx.compose.foundation.text.selection
 
-import androidx.compose.foundation.gestures.drag
-import androidx.compose.foundation.gestures.forEachGesture
 import androidx.compose.foundation.text.InternalFoundationTextApi
 import androidx.compose.foundation.text.TextDragObserver
-import androidx.compose.foundation.text.TextFieldDelegate
 import androidx.compose.foundation.text.TextFieldState
+import androidx.compose.foundation.text.UndoManager
 import androidx.compose.foundation.text.detectDragGesturesWithObserver
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -34,15 +32,8 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.hapticfeedback.HapticFeedback
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.ui.input.pointer.AwaitPointerEventScope
 import androidx.compose.ui.input.pointer.PointerEvent
-import androidx.compose.ui.input.pointer.PointerInputScope
-import androidx.compose.ui.input.pointer.PointerType
-import androidx.compose.ui.input.pointer.changedToDown
-import androidx.compose.ui.input.pointer.consumeAllChanges
-import androidx.compose.ui.input.pointer.consumeDownChange
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.platform.ClipboardManager
 import androidx.compose.ui.platform.TextToolbar
 import androidx.compose.ui.platform.TextToolbarStatus
@@ -57,14 +48,15 @@ import androidx.compose.ui.text.input.getTextAfterSelection
 import androidx.compose.ui.text.input.getTextBeforeSelection
 import androidx.compose.ui.text.style.ResolvedTextDirection
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.util.fastAll
 import kotlin.math.max
 import kotlin.math.min
 
 /**
  * A bridge class between user interaction to the text field selection.
  */
-internal class TextFieldSelectionManager {
+internal class TextFieldSelectionManager(
+    val undoManager: UndoManager? = null
+) {
 
     /**
      * The current [OffsetMapping] for text field.
@@ -183,7 +175,7 @@ internal class TextFieldSelectionManager {
                     transformedStartOffset = offset,
                     transformedEndOffset = offset,
                     isStartHandle = false,
-                    wordBasedSelection = true
+                    adjustment = SelectionAdjustment.WORD
                 )
                 dragBeginOffsetInText = offset
             }
@@ -210,7 +202,7 @@ internal class TextFieldSelectionManager {
                     transformedStartOffset = startOffset,
                     transformedEndOffset = endOffset,
                     isStartHandle = false,
-                    wordBasedSelection = true
+                    adjustment = SelectionAdjustment.WORD
                 )
             }
             state?.showFloatingToolbar = false
@@ -225,82 +217,89 @@ internal class TextFieldSelectionManager {
         override fun onCancel() {}
     }
 
-    internal interface MouseSelectionObserver {
-        fun onDown(downPosition: Offset, shiftIsPressed: Boolean)
-        fun onDrag(dragDistance: Offset)
-    }
-
     internal val mouseSelectionObserver = object : MouseSelectionObserver {
-        override fun onDown(downPosition: Offset, shiftIsPressed: Boolean) {
-            focusRequester?.requestFocus()
-
-            dragBeginPosition = downPosition
-            dragTotalDistance = Offset.Zero
-
+        override fun onExtend(downPosition: Offset): Boolean {
             state?.layoutResult?.let { layoutResult ->
-                dragBeginOffsetInText = layoutResult.getOffsetForPosition(downPosition)
-                // * Without shift it starts the new selection from the scratch.
-                // * With shift expand / shrink existed selection.
-                // * Click sets start and end of the selection, but shift click only the end of
-                // selection.
-                // * The specific case of it when selection is collapsed, but the same logic is
-                // applied for not collapsed selection too.
-                if (shiftIsPressed) {
-                    val startOffset = offsetMapping.originalToTransformed(value.selection.start)
-                    val clickOffset = layoutResult.getOffsetForPosition(dragBeginPosition)
-                    updateSelection(
-                        value = value,
-                        transformedStartOffset = startOffset,
-                        transformedEndOffset = clickOffset,
-                        isStartHandle = false,
-                        wordBasedSelection = false
-                    )
-                } else {
-                    TextFieldDelegate.setCursorOffset(
-                        downPosition,
-                        layoutResult,
-                        state!!.processor,
-                        offsetMapping,
-                        onValueChange
-                    )
-                }
+                val startOffset = offsetMapping.originalToTransformed(value.selection.start)
+                val clickOffset = layoutResult.getOffsetForPosition(downPosition)
+                updateSelection(
+                    value = value,
+                    transformedStartOffset = startOffset,
+                    transformedEndOffset = clickOffset,
+                    isStartHandle = false,
+                    adjustment = SelectionAdjustment.NONE
+                )
+                return true
             }
+            return false
         }
 
-        override fun onDrag(dragDistance: Offset) {
-            if (value.text.isEmpty()) return
+        override fun onExtendDrag(dragPosition: Offset): Boolean {
+            if (value.text.isEmpty()) return false
 
-            dragTotalDistance += dragDistance
             state?.layoutResult?.let { layoutResult ->
+                val startOffset = offsetMapping.originalToTransformed(value.selection.start)
                 val dragOffset =
                     layoutResult.getOffsetForPosition(
-                        position = dragBeginPosition + dragTotalDistance,
+                        position = dragPosition,
                         coerceInVisibleBounds = false
                     )
-                val startOffset = offsetMapping.originalToTransformed(value.selection.start)
+
                 updateSelection(
                     value = value,
                     transformedStartOffset = startOffset,
                     transformedEndOffset = dragOffset,
                     isStartHandle = false,
-                    wordBasedSelection = false
+                    adjustment = SelectionAdjustment.NONE
                 )
+                return true
             }
+            return false
         }
-    }
 
-    internal suspend fun mouseSelectionDetector(scope: PointerInputScope) {
-        scope.forEachGesture {
-            awaitPointerEventScope {
-                val down = awaitMouseEventFirstDown()
-                val downChange = down.changes[0]
-                downChange.consumeDownChange()
-                mouseSelectionObserver.onDown(downChange.position, down.isShiftPressed)
-                drag(downChange.id) {
-                    mouseSelectionObserver.onDrag(it.positionChange())
-                    it.consumeAllChanges()
-                }
+        override fun onStart(
+            downPosition: Offset,
+            adjustment: SelectionAdjustment
+        ): Boolean {
+            focusRequester?.requestFocus()
+
+            dragBeginPosition = downPosition
+
+            state?.layoutResult?.let { layoutResult ->
+                dragBeginOffsetInText = layoutResult.getOffsetForPosition(downPosition)
+                val clickOffset = layoutResult.getOffsetForPosition(dragBeginPosition)
+                updateSelection(
+                    value = value,
+                    transformedStartOffset = clickOffset,
+                    transformedEndOffset = clickOffset,
+                    isStartHandle = false,
+                    adjustment = adjustment
+                )
+                return true
             }
+            return false
+        }
+
+        override fun onDrag(dragPosition: Offset, adjustment: SelectionAdjustment): Boolean {
+            if (value.text.isEmpty()) return false
+
+            state?.layoutResult?.let { layoutResult ->
+                val dragOffset =
+                    layoutResult.getOffsetForPosition(
+                        position = dragPosition,
+                        coerceInVisibleBounds = false
+                    )
+
+                updateSelection(
+                    value = value,
+                    transformedStartOffset = dragBeginOffsetInText!!,
+                    transformedEndOffset = dragOffset,
+                    isStartHandle = false,
+                    adjustment = adjustment
+                )
+                return true
+            }
+            return false
         }
     }
 
@@ -338,7 +337,7 @@ internal class TextFieldSelectionManager {
                         transformedStartOffset = startOffset,
                         transformedEndOffset = endOffset,
                         isStartHandle = isStartHandle,
-                        wordBasedSelection = false
+                        adjustment = SelectionAdjustment.CHARACTER
                     )
                 }
                 state?.showFloatingToolbar = false
@@ -447,6 +446,7 @@ internal class TextFieldSelectionManager {
         )
         onValueChange(newValue)
         setSelectionStatus(false)
+        undoManager?.forceNextSnapshot()
     }
 
     /**
@@ -474,6 +474,7 @@ internal class TextFieldSelectionManager {
         )
         onValueChange(newValue)
         setSelectionStatus(false)
+        undoManager?.forceNextSnapshot()
     }
 
     /*@VisibleForTesting*/
@@ -485,6 +486,10 @@ internal class TextFieldSelectionManager {
             selection = TextRange(0, value.text.length)
         )
         onValueChange(newValue)
+        oldValue = oldValue.copy(selection = newValue.selection)
+        hideSelectionToolbar()
+        state?.showFloatingToolbar = true
+        showSelectionToolbar()
     }
 
     internal fun getHandlePosition(isStartHandle: Boolean): Offset {
@@ -525,7 +530,9 @@ internal class TextFieldSelectionManager {
             }
         } else null
 
-        val selectAll: (() -> Unit)? = if (value.selection.length != value.text.length) {
+        val selectAll: (() -> Unit)? = if (value.selection.length != value.text.length &&
+            oldValue.selection.length != oldValue.text.length
+        ) {
             {
                 selectAll()
             }
@@ -608,7 +615,7 @@ internal class TextFieldSelectionManager {
         transformedStartOffset: Int,
         transformedEndOffset: Int,
         isStartHandle: Boolean,
-        wordBasedSelection: Boolean
+        adjustment: SelectionAdjustment
     ) {
         val transformedSelection = TextRange(
             offsetMapping.originalToTransformed(value.selection.start),
@@ -620,9 +627,8 @@ internal class TextFieldSelectionManager {
             rawStartOffset = transformedStartOffset,
             rawEndOffset = transformedEndOffset,
             previousSelection = if (transformedSelection.collapsed) null else transformedSelection,
-            previousHandlesCrossed = transformedSelection.reversed,
             isStartHandle = isStartHandle,
-            wordBasedSelection = wordBasedSelection
+            adjustment = adjustment
         )
 
         val originalSelection = TextRange(
@@ -682,7 +688,7 @@ internal fun TextFieldSelectionHandle(
         modifier = Modifier.pointerInput(observer) {
             detectDragGesturesWithObserver(observer)
         },
-        handle = null
+        content = null
     )
 }
 
@@ -694,16 +700,6 @@ internal fun TextFieldSelectionManager.isSelectionHandleInVisibleBound(
 ): Boolean = state?.layoutCoordinates?.visibleBounds()?.containsInclusive(
     getHandlePosition(isStartHandle)
 ) ?: false
-
-private suspend fun AwaitPointerEventScope.awaitMouseEventFirstDown(): PointerEvent {
-    var event: PointerEvent
-    do {
-        event = awaitPointerEvent()
-    } while (
-        !event.changes.fastAll { it.type == PointerType.Mouse && it.changedToDown() }
-    )
-    return event
-}
 
 // TODO(b/180075467) it should be part of PointerEvent API in one way or another
 internal expect val PointerEvent.isShiftPressed: Boolean

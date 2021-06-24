@@ -16,7 +16,6 @@
 
 package androidx.benchmark
 
-import android.annotation.SuppressLint
 import android.os.Build
 import android.os.Environment
 import android.util.Log
@@ -50,16 +49,19 @@ public object Outputs {
         // Be explicit about the TimeZone for stable formatting
         formatter.timeZone = TimeZone.getTimeZone("UTC")
 
-        @SuppressLint("UnsafeNewApiCall", "NewApi")
         @Suppress("DEPRECATION")
-        dirUsableByAppAndShell = when (Build.VERSION.SDK_INT) {
-            Build.VERSION_CODES.R -> {
+        dirUsableByAppAndShell = when {
+            Build.VERSION.SDK_INT == 30 -> {
                 // On Android R, we are using the media directory because that is the directory
                 // that the shell has access to. Context: b/181601156
                 InstrumentationRegistry.getInstrumentation().context.externalMediaDirs
                     .firstOrNull {
                         Environment.getExternalStorageState(it) == Environment.MEDIA_MOUNTED
                     }
+            }
+            Build.VERSION.SDK_INT <= 22 -> {
+                // prior to API 23, shell didn't have access to externalCacheDir
+                InstrumentationRegistry.getInstrumentation().context.cacheDir
             }
             else -> InstrumentationRegistry.getInstrumentation().context.externalCacheDir
         } ?: throw IllegalStateException(
@@ -89,12 +91,14 @@ public object Outputs {
         reportOnRunEndOnly: Boolean = false,
         block: (file: File) -> Unit,
     ): String {
+        val sanitizedName = sanitizeFilename(fileName)
+
         // We need to copy files over anytime `dirUsableByAppAndShell` is different from
         // `outputDirectory`.
         val override = dirUsableByAppAndShell != outputDirectory
         // We override the `additionalTestOutputDir` argument.
         // Context: b/181601156
-        val file = File(dirUsableByAppAndShell, fileName)
+        val file = File(dirUsableByAppAndShell, sanitizedName)
         try {
             block.invoke(file)
         } finally {
@@ -102,7 +106,7 @@ public object Outputs {
             if (override) {
                 // This respects the `additionalTestOutputDir` argument.
                 val actualOutputDirectory = outputDirectory
-                destination = File(actualOutputDirectory, fileName)
+                destination = File(actualOutputDirectory, sanitizedName)
                 Log.d(BenchmarkState.TAG, "Copying $file to $destination")
                 try {
                     destination.mkdirs()
@@ -127,6 +131,13 @@ public object Outputs {
             )
             return destination.absolutePath
         }
+    }
+
+    public fun sanitizeFilename(filename: String): String {
+        return filename
+            .replace(" ", "")
+            .replace("(", "[")
+            .replace(")", "]")
     }
 
     public fun testOutputFile(filename: String): File {

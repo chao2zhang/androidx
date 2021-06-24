@@ -34,6 +34,7 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
+import androidx.compose.ui.window.PopupProperties
 import kotlin.math.roundToInt
 
 @Composable
@@ -44,7 +45,7 @@ internal actual fun SelectionHandle(
     directions: Pair<ResolvedTextDirection, ResolvedTextDirection>,
     handlesCrossed: Boolean,
     modifier: Modifier,
-    handle: (@Composable () -> Unit)?
+    content: @Composable (() -> Unit)?
 ) {
     SelectionHandlePopup(
         startHandlePosition = startHandlePosition,
@@ -53,14 +54,14 @@ internal actual fun SelectionHandle(
         directions = directions,
         handlesCrossed = handlesCrossed
     ) {
-        if (handle == null) {
+        if (content == null) {
             DefaultSelectionHandle(
                 modifier = modifier,
                 isStartHandle = isStartHandle,
                 directions = directions,
                 handlesCrossed = handlesCrossed
             )
-        } else handle()
+        } else content()
     }
 }
 
@@ -181,6 +182,10 @@ private fun SelectionHandlePopup(
 
     Popup(
         popupPositionProvider = popupPositioner,
+        properties = PopupProperties(
+            excludeFromSystemGesture = true,
+            clippingEnabled = false
+        ),
         content = content
     )
 }

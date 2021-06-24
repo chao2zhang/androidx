@@ -16,11 +16,9 @@
 
 package androidx.security.identity;
 
-import android.annotation.SuppressLint;
 import android.content.Context;
 import android.icu.util.Calendar;
 import android.security.keystore.KeyProperties;
-import android.util.Log;
 import android.util.Pair;
 
 import androidx.annotation.NonNull;
@@ -69,8 +67,6 @@ import co.nstant.in.cbor.CborDecoder;
 import co.nstant.in.cbor.CborEncoder;
 import co.nstant.in.cbor.CborException;
 import co.nstant.in.cbor.builder.MapBuilder;
-import co.nstant.in.cbor.model.Array;
-import co.nstant.in.cbor.model.ByteString;
 import co.nstant.in.cbor.model.DataItem;
 import co.nstant.in.cbor.model.Map;
 import co.nstant.in.cbor.model.UnicodeString;
@@ -190,7 +186,6 @@ class SoftwareIdentityCredential extends IdentityCredential {
         return result;
     }
 
-    @SuppressLint("NewApi")
     @Override
     public @NonNull KeyPair createEphemeralKeyPair() {
         if (mEphemeralKeyPair == null) {
@@ -237,7 +232,7 @@ class SoftwareIdentityCredential extends IdentityCredential {
             byte[] sharedSecret = ka.generateSecret();
 
             byte[] sessionTranscriptBytes =
-                    Util.prependSemanticTagForEncodedCbor(mSessionTranscript);
+                    Util.cborEncode(Util.cborBuildTaggedByteString(mSessionTranscript));
             byte[] salt = MessageDigest.getInstance("SHA-256").digest(sessionTranscriptBytes);
 
             byte[] info = new byte[] {'S', 'K', 'D', 'e', 'v', 'i', 'c', 'e'};
@@ -377,41 +372,21 @@ class SoftwareIdentityCredential extends IdentityCredential {
         return mCryptoObject;
     }
 
-    private boolean hasEphemeralKeyInDeviceEngagement(@NonNull byte[] sessionTranscript) {
+    private boolean hasEphemeralKeyInSessionTranscript(@NonNull byte[] sessionTranscript) {
         if (mEphemeralKeyPair == null) {
             return false;
         }
         // The place to search for X and Y is in the DeviceEngagementBytes which is
-        // the first bstr in the SessionTranscript array.
-        ByteArrayInputStream bais = new ByteArrayInputStream(sessionTranscript);
-        List<DataItem> dataItems = null;
-        try {
-            dataItems = new CborDecoder(bais).decode();
-        } catch (CborException e) {
-            Log.e(TAG, "Error parsing SessionTranscript CBOR");
-            return false;
-        }
-        if (dataItems.size() != 1
-                || !(dataItems.get(0) instanceof Array)
-                || ((Array) dataItems.get(0)).getDataItems().size() != 2) {
-            Log.e(TAG, "SessionTranscript is not an array of length 2");
-            return false;
-        }
-        if (!(((Array) dataItems.get(0)).getDataItems().get(0) instanceof ByteString)) {
-            Log.e(TAG, "First element of SessionTranscript array is not a bstr");
-            return false;
-        }
-        byte[] deviceEngagementBytes =
-                ((ByteString) ((Array) dataItems.get(0)).getDataItems().get(0)).getBytes();
-
+        // the first bstr in the SessionTranscript array but it's just as good to just search
+        // in the given SessionTranscript bytes (just a bit more work).
         ECPoint w = ((ECPublicKey) mEphemeralKeyPair.getPublic()).getW();
+
         // X and Y are always positive so for interop we remove any leading zeroes
         // inserted by the BigInteger encoder.
         byte[] x = Util.stripLeadingZeroes(w.getAffineX().toByteArray());
         byte[] y = Util.stripLeadingZeroes(w.getAffineY().toByteArray());
-
-        if (!Util.hasSubByteArray(deviceEngagementBytes, x)
-                && !Util.hasSubByteArray(deviceEngagementBytes, y)) {
+        if (!Util.hasSubByteArray(sessionTranscript, x)
+                && !Util.hasSubByteArray(sessionTranscript, y)) {
             return false;
         }
         return true;
@@ -463,7 +438,7 @@ class SoftwareIdentityCredential extends IdentityCredential {
             InvalidReaderSignatureException, InvalidRequestMessageException,
             EphemeralPublicKeyNotFoundException {
 
-        if (mSessionTranscript != null && !hasEphemeralKeyInDeviceEngagement(mSessionTranscript)) {
+        if (mSessionTranscript != null && !hasEphemeralKeyInSessionTranscript(mSessionTranscript)) {
             throw new EphemeralPublicKeyNotFoundException(
                     "Did not find ephemeral public key X and Y coordinates in SessionTranscript "
                             + "(make sure leading zeroes are not used)");
@@ -483,11 +458,8 @@ class SoftwareIdentityCredential extends IdentityCredential {
                         "readerSignature non-null but requestMessage was null");
             }
 
-            try {
-                readerCertChain = Util.coseSign1GetX5Chain(readerSignature);
-            } catch (CertificateException e) {
-                throw new InvalidReaderSignatureException("Error getting x5chain element", e);
-            }
+            DataItem readerSignatureItem = Util.cborDecode(readerSignature);
+            readerCertChain = Util.coseSign1GetX5Chain(readerSignatureItem);
             if (readerCertChain.size() < 1) {
                 throw new InvalidReaderSignatureException("No x5chain element in reader signature");
             }
@@ -496,20 +468,21 @@ class SoftwareIdentityCredential extends IdentityCredential {
             }
             PublicKey readerTopmostPublicKey = readerCertChain.iterator().next().getPublicKey();
 
-            byte[] readerAuthentication = Util.buildReaderAuthenticationCbor(
-                    mSessionTranscript,
-                    requestMessage);
+            byte[] readerAuthentication = Util.cborEncode(new CborBuilder()
+                    .addArray()
+                    .add("ReaderAuthentication")
+                    .add(Util.cborDecode(mSessionTranscript))
+                    .add(Util.cborBuildTaggedByteString(requestMessage))
+                    .end()
+                    .build().get(0));
+
             byte[] readerAuthenticationBytes =
-                    Util.prependSemanticTagForEncodedCbor(readerAuthentication);
-            try {
-                if (!Util.coseSign1CheckSignature(
-                        readerSignature,
-                        readerAuthenticationBytes,
-                        readerTopmostPublicKey)) {
-                    throw new InvalidReaderSignatureException("Reader signature check failed");
-                }
-            } catch (NoSuchAlgorithmException | InvalidKeyException e) {
-                throw new InvalidReaderSignatureException("Error checking reader signature", e);
+                    Util.cborEncode(Util.cborBuildTaggedByteString(readerAuthentication));
+            if (!Util.coseSign1CheckSignature(
+                    Util.cborDecode(readerSignature),
+                    readerAuthenticationBytes,
+                    readerTopmostPublicKey)) {
+                throw new InvalidReaderSignatureException("Reader signature check failed");
             }
         }
 
@@ -548,22 +521,26 @@ class SoftwareIdentityCredential extends IdentityCredential {
             ensureAuthKey();
             resultBuilder.setStaticAuthenticationData(mAuthKeyAssociatedData);
 
-            byte[] deviceAuthentication = Util.buildDeviceAuthenticationCbor(
-                    mData.getDocType(),
-                    mSessionTranscript,
-                    authenticatedData);
+            byte[] deviceAuthentication = Util.cborEncode(new CborBuilder()
+                    .addArray()
+                    .add("DeviceAuthentication")
+                    .add(Util.cborDecode(mSessionTranscript))
+                    .add(mData.getDocType())
+                    .add(Util.cborBuildTaggedByteString(authenticatedData))
+                    .end()
+                    .build().get(0));
 
             byte[] deviceAuthenticationBytes =
-                    Util.prependSemanticTagForEncodedCbor(deviceAuthentication);
+                    Util.cborEncode(Util.cborBuildTaggedByteString(deviceAuthentication));
 
             try {
                 Signature authKeySignature = Signature.getInstance("SHA256withECDSA");
                 authKeySignature.initSign(mAuthKey);
                 resultBuilder.setEcdsaSignature(
-                        Util.coseSign1Sign(authKeySignature,
+                        Util.cborEncode(Util.coseSign1Sign(authKeySignature,
                                 null,
                                 deviceAuthenticationBytes,
-                                null));
+                                null)));
             } catch (NoSuchAlgorithmException
                     | InvalidKeyException
                     | CertificateEncodingException e) {
@@ -651,7 +628,7 @@ class SoftwareIdentityCredential extends IdentityCredential {
                 deviceNamespaceBuilder = deviceNameSpacesMapBuilder.putMap(
                         namespaceName);
             }
-            DataItem dataItem = Util.cborToDataItem(value);
+            DataItem dataItem = Util.cborDecode(value);
             deviceNamespaceBuilder.put(new UnicodeString(requestedEntryName), dataItem);
         }
     }
@@ -754,13 +731,13 @@ class SoftwareIdentityCredential extends IdentityCredential {
             int authKeyCount = mData.getAuthKeyCount();
             int authMaxUsesPerKey = mData.getAuthMaxUsesPerKey();
 
-            byte[] encodedBytes =
+            DataItem signature =
                     SoftwareWritableIdentityCredential.buildProofOfProvisioningWithSignature(
                             docType,
                             personalizationData,
                             credentialKey);
 
-            byte[] proofOfProvisioning = Util.coseSign1GetData(encodedBytes);
+            byte[] proofOfProvisioning = Util.coseSign1GetData(signature);
             byte[] proofOfProvisioningSha256 = MessageDigest.getInstance("SHA-256").digest(
                     proofOfProvisioning);
 
@@ -781,7 +758,7 @@ class SoftwareIdentityCredential extends IdentityCredential {
             //
             mData.setAvailableAuthenticationKeys(authKeyCount, authMaxUsesPerKey);
 
-            return encodedBytes;
+            return Util.cborEncode(signature);
 
         } catch (NoSuchAlgorithmException e) {
             throw new RuntimeException("Error digesting ProofOfProvisioning", e);

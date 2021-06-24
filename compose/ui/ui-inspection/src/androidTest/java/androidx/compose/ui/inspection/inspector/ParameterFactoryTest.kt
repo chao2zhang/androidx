@@ -892,6 +892,7 @@ class ParameterFactoryTest {
             NODE_ID,
             name,
             value,
+            ParameterKind.Normal,
             PARAM_INDEX,
             maxRecursions,
             maxInitialIterableSize
@@ -939,7 +940,7 @@ class ParameterFactoryTest {
     }
 
     private fun ref(vararg reference: Int): NodeParameterReference =
-        NodeParameterReference(NODE_ID, PARAM_INDEX, reference)
+        NodeParameterReference(NODE_ID, ParameterKind.Normal, PARAM_INDEX, reference)
 
     private fun validate(
         parameter: NodeParameter,
@@ -958,8 +959,8 @@ class ParameterFactoryTest {
         maxRecursions: Int,
         maxInitialIterableSize: Int
     ) {
-        factory.clearCacheFor(ROOT_ID)
-        val reference = NodeParameterReference(NODE_ID, PARAM_INDEX, indices)
+        factory.clearReferenceCache()
+        val reference = NodeParameterReference(NODE_ID, ParameterKind.Normal, PARAM_INDEX, indices)
         val expanded = expand(
             name,
             value,

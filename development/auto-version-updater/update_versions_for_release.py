@@ -285,9 +285,9 @@ def commit_updates(release_date):
     staged_changes = subprocess.check_output('git diff --cached', stderr=subprocess.STDOUT, shell=True)
     if not staged_changes:
         return
-    msg = "Update versions for release id %s\n\nThis commit was generated from the command:\n%s\n\n%s" % (release_date, " ".join(sys.argv), 'Test: ./gradlew checkApi')
+    msg = "'Update versions for release id %s\n\nThis commit was generated from the command:\n%s\n\n%s'" % (release_date, " ".join(sys.argv), "Test: ./gradlew checkApi")
     subprocess.check_call(['git', 'commit', '-m', msg])
-    subprocess.check_call(['yes', '|', 'repo', 'upload', '.', '--cbr', '--label', 'Presubmit-Ready+1'])
+    subprocess.check_output('yes | repo upload . --current-branch --no-verify --label Presubmit-Ready+1', stderr=subprocess.STDOUT, shell=True)
 
 def main(args):
     # Parse arguments and check for existence of build ID or file
@@ -299,8 +299,13 @@ def main(args):
     non_updated_libraries = []
     for group_id in release_json_object["modules"]:
         for artifact in release_json_object["modules"][group_id]:
-            updated = update_versions_in_library_versions_kt(group_id,
-                artifact["artifactId"], artifact["version"])
+            updated = False
+            if artifact["branch"].startswith("aosp-androidx-"):
+                # Only update versions for artifacts released from the AOSP
+                # androidx-main branch or from androidx release branches, but
+                # not from any other development branch.
+                updated = update_versions_in_library_versions_kt(group_id,
+                    artifact["artifactId"], artifact["version"])
             if not updated:
                 non_updated_libraries.append("%s:%s:%s" % (group_id,
                                              artifact["artifactId"],

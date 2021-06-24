@@ -20,8 +20,8 @@ import android.app.AlarmManager;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.VisibleForTesting;
-import androidx.wear.tiles.builders.LayoutElementBuilders;
-import androidx.wear.tiles.builders.TimelineBuilders;
+import androidx.wear.tiles.LayoutElementBuilders;
+import androidx.wear.tiles.TimelineBuilders;
 import androidx.wear.tiles.timeline.internal.TilesTimelineManagerInternal;
 
 import java.util.concurrent.Executor;
@@ -32,7 +32,7 @@ import java.util.concurrent.Executor;
  * <p>This handles the dispatching of single Tile layouts from a full timeline. It will set the
  * correct alarms to detect when a layout should be updated, and dispatch it to its listener.
  */
-public class TilesTimelineManager {
+public class TilesTimelineManager implements AutoCloseable {
     @VisibleForTesting
     static final long MIN_TILE_UPDATE_DELAY_MILLIS =
             TilesTimelineManagerInternal.MIN_TILE_UPDATE_DELAY_MILLIS;
@@ -73,17 +73,18 @@ public class TilesTimelineManager {
             @NonNull TimelineBuilders.Timeline timeline,
             int token,
             @NonNull Executor listenerExecutor,
-            @NonNull Listener listener
-    ) {
-        mManager = new TilesTimelineManagerInternal(
-                alarmManager,
-                () -> clock.getCurrentTimeMillis(),
-                timeline.toProto(),
-                token,
-                listenerExecutor,
-                (t, entry) -> listener.onLayoutUpdate(t,
-                        LayoutElementBuilders.Layout.fromProto(entry.getLayout()))
-        );
+            @NonNull Listener listener) {
+        mManager =
+                new TilesTimelineManagerInternal(
+                        alarmManager,
+                        () -> clock.getCurrentTimeMillis(),
+                        timeline.toProto(),
+                        token,
+                        listenerExecutor,
+                        (t, entry) ->
+                                listener.onLayoutUpdate(
+                                        t,
+                                        LayoutElementBuilders.Layout.fromProto(entry.getLayout())));
     }
 
     /**
@@ -95,7 +96,8 @@ public class TilesTimelineManager {
     }
 
     /** Tears down this Timeline Manager. This will ensure any set alarms are cleared up. */
-    public void deInit() {
-        mManager.deInit();
+    @Override
+    public void close() {
+        mManager.close();
     }
 }

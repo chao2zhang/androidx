@@ -23,8 +23,9 @@ import android.view.Surface;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.camera.core.CameraSelector;
-import androidx.camera.core.ExperimentalExposureCompensation;
+import androidx.camera.core.CameraState;
 import androidx.camera.core.ExposureState;
+import androidx.camera.core.FocusMeteringAction;
 import androidx.camera.core.TorchState;
 import androidx.camera.core.ZoomState;
 import androidx.camera.core.impl.CamcorderProfileProvider;
@@ -55,8 +56,8 @@ public final class FakeCameraInfoInternal implements CameraInfoInternal {
     private final int mLensFacing;
     private final boolean mHasFlashUnit = true;
     private MutableLiveData<Integer> mTorchState = new MutableLiveData<>(TorchState.OFF);
-
     private final MutableLiveData<ZoomState> mZoomLiveData;
+    private MutableLiveData<CameraState> mCameraStateLiveData;
     private String mImplementationType = IMPLEMENTATION_TYPE_FAKE;
 
     // Leave uninitialized to support camera-core:1.0.0 dependencies.
@@ -137,7 +138,6 @@ public final class FakeCameraInfoInternal implements CameraInfoInternal {
 
     @NonNull
     @Override
-    @ExperimentalExposureCompensation
     public ExposureState getExposureState() {
         return new ExposureState() {
             @Override
@@ -162,6 +162,16 @@ public final class FakeCameraInfoInternal implements CameraInfoInternal {
                 return true;
             }
         };
+    }
+
+    @NonNull
+    @Override
+    public LiveData<CameraState> getCameraState() {
+        if (mCameraStateLiveData == null) {
+            mCameraStateLiveData = new MutableLiveData<>(
+                    CameraState.create(CameraState.Type.CLOSED));
+        }
+        return mCameraStateLiveData;
     }
 
     @NonNull
@@ -192,6 +202,11 @@ public final class FakeCameraInfoInternal implements CameraInfoInternal {
     @Override
     public Quirks getCameraQuirks() {
         return new Quirks(mCameraQuirks);
+    }
+
+    @Override
+    public boolean isFocusMeteringSupported(@NonNull FocusMeteringAction action) {
+        return false;
     }
 
     /** Adds a quirk to the list of this camera's quirks. */

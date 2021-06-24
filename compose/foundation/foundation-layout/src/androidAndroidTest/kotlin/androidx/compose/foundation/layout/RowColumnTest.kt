@@ -1743,6 +1743,54 @@ class RowColumnTest : LayoutTest() {
         }
         assertTrue(latch.await(1, TimeUnit.SECONDS))
     }
+
+    @Test
+    fun testRow_doesNotExpand_whenWeightChildrenDoNotFill() = with(density) {
+        val size = 10
+        var rowWidth = 0
+        val latch = CountDownLatch(1)
+        show {
+            Row(
+                Modifier.onGloballyPositioned {
+                    rowWidth = it.size.width
+                    latch.countDown()
+                }
+            ) {
+                Box(Modifier.weight(1f, false).size(size.toDp()))
+            }
+        }
+        assertTrue(latch.await(1, TimeUnit.SECONDS))
+        assertEquals(size, rowWidth)
+    }
+
+    @Test
+    fun testRow_includesSpacing_withWeightChildren() = with(density) {
+        val rowWidth = 40
+        val space = 8
+        val latch = CountDownLatch(2)
+        show {
+            Row(
+                modifier = Modifier.widthIn(max = rowWidth.toDp()),
+                horizontalArrangement = Arrangement.spacedBy(space.toDp())
+            ) {
+                Box(
+                    Modifier.weight(1f).onGloballyPositioned {
+                        assertEquals((rowWidth - space) / 2, it.size.width)
+                        assertEquals(0, it.positionInRoot().x.toInt())
+                        latch.countDown()
+                    }
+                )
+                Box(
+                    Modifier.weight(1f).onGloballyPositioned {
+                        assertEquals((rowWidth - space) / 2, it.size.width)
+                        assertEquals((rowWidth - space) / 2 + space, it.positionInRoot().x.toInt())
+                        latch.countDown()
+                    }
+                )
+            }
+        }
+        assertTrue(latch.await(1, TimeUnit.SECONDS))
+    }
     // endregion
 
     // region Size tests in Column
@@ -2229,6 +2277,57 @@ class RowColumnTest : LayoutTest() {
                         }
                     }
                 }
+            }
+        }
+        assertTrue(latch.await(1, TimeUnit.SECONDS))
+    }
+
+    @Test
+    fun testColumn_doesNotExpand_whenWeightChildrenDoNotFill() = with(density) {
+        val size = 10
+        var columnHeight = 0
+        val latch = CountDownLatch(1)
+        show {
+            Column(
+                Modifier.onGloballyPositioned {
+                    columnHeight = it.size.height
+                    latch.countDown()
+                }
+            ) {
+                Box(Modifier.weight(1f, false).size(size.toDp()))
+            }
+        }
+        assertTrue(latch.await(1, TimeUnit.SECONDS))
+        assertEquals(size, columnHeight)
+    }
+
+    @Test
+    fun testColumn_includesSpacing_withWeightChildren() = with(density) {
+        val columnHeight = 40
+        val space = 8
+        val latch = CountDownLatch(2)
+        show {
+            Column(
+                modifier = Modifier.height(columnHeight.toDp()),
+                verticalArrangement = Arrangement.spacedBy(space.toDp())
+            ) {
+                Box(
+                    Modifier.weight(1f).onGloballyPositioned {
+                        assertEquals((columnHeight - space) / 2, it.size.height)
+                        assertEquals(0, it.positionInRoot().y.toInt())
+                        latch.countDown()
+                    }
+                )
+                Box(
+                    Modifier.weight(1f).onGloballyPositioned {
+                        assertEquals((columnHeight - space) / 2, it.size.height)
+                        assertEquals(
+                            (columnHeight - space) / 2 + space,
+                            it.positionInRoot().y.toInt()
+                        )
+                        latch.countDown()
+                    }
+                )
             }
         }
         assertTrue(latch.await(1, TimeUnit.SECONDS))
